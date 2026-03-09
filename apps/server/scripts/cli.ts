@@ -128,13 +128,13 @@ const buildCmd = Command.make(
 
       yield* Effect.log("[cli] Running tsdown...");
       yield* runCommand(
-        ChildProcess.make({
+        ChildProcess.make("bun", ["tsdown"], {
           cwd: serverDir,
           stdout: config.verbose ? "inherit" : "ignore",
           stderr: "inherit",
           // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
           shell: process.platform === "win32",
-        })`bun tsdown`,
+        }),
       );
 
       const webDist = path.join(repoRoot, "apps/web/dist");

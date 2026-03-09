@@ -52,6 +52,7 @@
         "@effect/sql-sqlite-bun": "catalog:",
         "@pierre/diffs": "^1.1.0-beta.16",
         "effect": "catalog:",
+        "@effect/platform-node-shared": "https://pkg.pr.new/Effect-TS/effect-smol/@effect/platform-node-shared@8881a9b606d84a6f5eb6615279138322984f5368",
         "node-pty": "^1.1.0",
         "open": "^10.1.0",
         "ws": "^8.18.0",
