@@ -47,6 +47,7 @@ import { derivePendingApprovals, derivePendingUserInputs } from "../session-logi
 import { gitRemoveWorktreeMutationOptions, gitStatusQueryOptions } from "../lib/gitReactQuery";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
+import VirtualOffice from "./VirtualOffice";
 import { type DraftThreadEnvMode, useComposerDraftStore } from "../composerDraftStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { toastManager } from "./ui/toast";
@@ -1537,6 +1538,10 @@ export default function Sidebar() {
       </SidebarContent>
 
       <SidebarSeparator />
+      {/* Mini Virtual Office */}
+      <div className="h-[160px] w-full shrink-0 overflow-hidden border-b border-border/40">
+        <VirtualOffice />
+      </div>
       <SidebarFooter className="p-2">
         <SidebarMenu>
           <SidebarMenuItem>
