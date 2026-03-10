@@ -47,6 +47,7 @@ function makeState(thread: Thread): AppState {
     ],
     threads: [thread],
     threadsHydrated: true,
+    sourceControlOpen: false,
   };
 }
 
@@ -182,6 +183,7 @@ describe("store pure functions", () => {
       ],
       threads: [],
       threadsHydrated: true,
+      sourceControlOpen: false,
     };
 
     const next = reorderProjects(state, project1, project3);
@@ -229,6 +231,7 @@ describe("store read model sync", () => {
       ],
       threads: [],
       threadsHydrated: true,
+      sourceControlOpen: false,
     };
     const readModel: OrchestrationReadModel = {
       snapshotSequence: 2,

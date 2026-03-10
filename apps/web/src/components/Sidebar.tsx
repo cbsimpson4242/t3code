@@ -80,6 +80,7 @@ import {
   SidebarSeparator,
   SidebarTrigger,
 } from "./ui/sidebar";
+import OfficeWorkers from "./OfficeWorkers";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { isNonEmpty as isNonEmptyString } from "effect/String";
 import { resolveThreadStatusPill } from "./Sidebar.logic";
@@ -1158,6 +1159,9 @@ export default function Sidebar() {
             </Alert>
           </SidebarGroup>
         ) : null}
+        
+        <OfficeWorkers />
+
         <SidebarGroup className="px-2 py-2">
           <div className="mb-1 flex items-center justify-between px-2">
             <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
