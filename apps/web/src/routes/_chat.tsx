@@ -3,7 +3,6 @@ import { useEffect } from "react";
 
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import ThreadSidebar from "../components/Sidebar";
-import VirtualOfficeBar from "../components/VirtualOfficeBar";
 import { Sidebar, SidebarProvider } from "~/components/ui/sidebar";
 
 function ChatRouteLayout() {
@@ -35,10 +34,7 @@ function ChatRouteLayout() {
         <ThreadSidebar />
       </Sidebar>
       <DiffWorkerPoolProvider>
-        <div className="flex flex-col flex-1 min-h-0 min-w-0">
-          <VirtualOfficeBar />
-          <Outlet />
-        </div>
+        <Outlet />
       </DiffWorkerPoolProvider>
     </SidebarProvider>
   );
