@@ -1089,7 +1089,11 @@ export default function Sidebar() {
   const wordmark = (
     <div className="flex items-center gap-2">
       <SidebarTrigger className="shrink-0 md:hidden" />
-      <div className="flex min-w-0 flex-1 items-center gap-1 mt-1.5 ml-1">
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 items-center gap-1 mt-1.5 ml-1 cursor-pointer hover:opacity-80 transition-opacity"
+        onClick={() => void navigate({ to: "/" })}
+      >
         <T3Wordmark />
         <span className="truncate text-sm font-medium tracking-tight text-muted-foreground">
           Code
@@ -1097,7 +1101,7 @@ export default function Sidebar() {
         <span className="rounded-full bg-muted/50 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-[0.18em] text-muted-foreground/60">
           {APP_STAGE_LABEL}
         </span>
-      </div>
+      </button>
     </div>
   );
 
