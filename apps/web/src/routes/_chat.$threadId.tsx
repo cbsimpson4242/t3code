@@ -3,12 +3,14 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Suspense, lazy, type ReactNode, useCallback, useEffect } from "react";
 
 import ChatView from "../components/ChatView";
+import VirtualOffice from "../components/VirtualOffice";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useStore } from "../store";
 import { Sheet, SheetPopup } from "../components/ui/sheet";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
+import ResizableVerticalStack from "~/components/ui/vertical-split";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
 const DIFF_INLINE_LAYOUT_MEDIA_QUERY = "(max-width: 1180px)";
@@ -16,6 +18,7 @@ const DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_diff_sidebar_width";
 const DIFF_INLINE_DEFAULT_WIDTH = "clamp(28rem,48vw,44rem)";
 const DIFF_INLINE_SIDEBAR_MIN_WIDTH = 26 * 16;
 const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 208;
+const OFFICE_CHAT_SPLIT_STORAGE_KEY = "chat_office_top_height";
 
 const DiffPanelSheet = (props: {
   children: ReactNode;
@@ -201,7 +204,21 @@ function ChatThreadRouteView() {
     return (
       <>
         <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-          <ChatView key={threadId} threadId={threadId} />
+          <ResizableVerticalStack
+            minTopHeight={220}
+            minBottomHeight={460}
+            storageKey={OFFICE_CHAT_SPLIT_STORAGE_KEY}
+            top={
+              <div className="h-full min-h-0 overflow-hidden border-b border-border/70 bg-background">
+                <VirtualOffice />
+              </div>
+            }
+            bottom={
+              <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+                <ChatView key={threadId} threadId={threadId} />
+              </div>
+            }
+          />
         </SidebarInset>
         <DiffPanelInlineSidebar diffOpen={diffOpen} onCloseDiff={closeDiff} onOpenDiff={openDiff} />
       </>
@@ -211,7 +228,21 @@ function ChatThreadRouteView() {
   return (
     <>
       <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-        <ChatView key={threadId} threadId={threadId} />
+        <ResizableVerticalStack
+          minTopHeight={220}
+          minBottomHeight={460}
+          storageKey={OFFICE_CHAT_SPLIT_STORAGE_KEY}
+          top={
+            <div className="h-full min-h-0 overflow-hidden border-b border-border/70 bg-background">
+              <VirtualOffice />
+            </div>
+          }
+          bottom={
+            <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+              <ChatView key={threadId} threadId={threadId} />
+            </div>
+          }
+        />
       </SidebarInset>
       <DiffPanelSheet diffOpen={diffOpen} onCloseDiff={closeDiff}>
         <Suspense fallback={<DiffLoadingFallback inline={false} />}>
