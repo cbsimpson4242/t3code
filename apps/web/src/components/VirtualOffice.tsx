@@ -4,7 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useStore } from "../store";
 
 // Office Configuration
-const ROOM_WIDTH = 800;
+const ROOM_WIDTH = 1600;
 const ROOM_HEIGHT = 600;
 
 // Bot color palette
@@ -26,15 +26,15 @@ const THOUGHT_EMOJIS = ["\u2615", "\ud83d\udca4", "\ud83d\udca1", "\ud83c\udf3f"
 
 // POIs (Points of Interest) for idle bots
 const POIS = [
-  { x: 100, y: 300 },
-  { x: 50, y: 500 },
-  { x: 750, y: 500 },
-  { x: 400, y: 450 },
-  { x: 450, y: 400 },
-  { x: 350, y: 400 },
-  { x: 700, y: 100 },
-  { x: 400, y: 300 },
-  { x: 200, y: 450 },
+  { x: 180, y: 310 },
+  { x: 120, y: 500 },
+  { x: 1480, y: 500 },
+  { x: 800, y: 450 },
+  { x: 900, y: 395 },
+  { x: 700, y: 395 },
+  { x: 1360, y: 110 },
+  { x: 800, y: 290 },
+  { x: 340, y: 450 },
 ];
 
 function getRandomPOI() {
@@ -45,7 +45,7 @@ function getDeskLocation(index: number) {
   const desksPerRow = 5;
   const row = Math.floor(index / desksPerRow);
   const col = index % desksPerRow;
-  return { x: 150 + col * 120, y: 100 + row * 150 };
+  return { x: 320 + col * 250, y: 105 + row * 155 };
 }
 
 function jitter(num: number, amount = 15) {
@@ -58,9 +58,9 @@ function distance(a: { x: number; y: number }, b: { x: number; y: number }) {
 
 // Conference table chair positions (around the oval)
 const TABLE_CHAIRS = [
-  { x: 340, y: 380 }, { x: 370, y: 365 }, { x: 430, y: 365 },
-  { x: 460, y: 380 }, { x: 460, y: 420 }, { x: 430, y: 435 },
-  { x: 370, y: 435 }, { x: 340, y: 420 },
+  { x: 700, y: 380 }, { x: 740, y: 365 }, { x: 860, y: 365 },
+  { x: 900, y: 380 }, { x: 900, y: 420 }, { x: 860, y: 435 },
+  { x: 740, y: 435 }, { x: 700, y: 420 },
 ];
 
 interface BotState {
@@ -233,15 +233,15 @@ export default function VirtualOffice() {
       ref={containerRef}
       className="relative w-full h-full flex items-center justify-center bg-background overflow-hidden"
     >
-      <div
-        className="relative rounded-lg border border-border/50 bg-secondary/20 overflow-hidden shadow-2xl"
-        style={{
-          width: ROOM_WIDTH,
-          height: ROOM_HEIGHT,
-          transform: `scale(${scale})`,
-          transformOrigin: "center center",
-        }}
-      >
+        <div
+          className="relative rounded-lg border border-border/50 bg-secondary/20 overflow-hidden shadow-2xl"
+          style={{
+            width: ROOM_WIDTH,
+            height: ROOM_HEIGHT,
+            transform: `scale(${scale})`,
+            transformOrigin: "center center",
+          }}
+        >
         {/* Floor - wood plank pattern */}
         <div
           className="absolute inset-0 opacity-[0.08] pointer-events-none"
@@ -270,10 +270,10 @@ export default function VirtualOffice() {
         <div className="absolute top-0 left-0 w-1.5 h-full bg-muted-foreground/20" />
 
         {/* Rug under conference table */}
-        <div
-          className="absolute pointer-events-none"
-          style={{ left: 310, top: 355, width: 180, height: 100 }}
-        >
+          <div
+            className="absolute pointer-events-none"
+            style={{ left: 650, top: 355, width: 300, height: 100 }}
+          >
           <div className="w-full h-full bg-amber-800/10 rounded-[50%] border border-amber-700/10" />
         </div>
 
@@ -286,6 +286,10 @@ export default function VirtualOffice() {
             className="absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center pointer-events-none"
             style={{ left: bot.deskLocation.x, top: bot.deskLocation.y - 18 }}
           >
+            <div className="mb-1 max-w-24 truncate rounded border border-border/60 bg-background/90 px-1.5 py-0.5 text-center text-[9px] font-mono text-foreground/80 shadow-sm">
+              {bot.title.slice(0, 18)}
+              {bot.title.length > 18 ? "..." : ""}
+            </div>
             {/* Monitor on stand */}
             <div className="flex flex-col items-center">
               <div className="w-10 h-7 bg-slate-700/60 rounded-sm border border-slate-600/50 flex items-center justify-center">
@@ -307,7 +311,7 @@ export default function VirtualOffice() {
         ))}
 
         {/* Water Cooler with drip */}
-        <div className="absolute left-[100px] top-[300px] -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
+        <div className="absolute left-[180px] top-[300px] -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
           <div className="w-10 h-14 bg-sky-200/80 rounded-t-full shadow-inner border border-sky-300" />
           <div className="w-8 h-12 bg-muted-foreground/40 rounded-b flex items-center justify-center relative">
             <div className="w-1 h-3 bg-sky-400 rounded-b mt-2" />
@@ -322,8 +326,8 @@ export default function VirtualOffice() {
         </div>
 
         {/* Conference Table with chairs */}
-        <div className="absolute left-[400px] top-[400px] -translate-x-1/2 -translate-y-1/2 w-48 h-24 bg-amber-900/25 rounded-full border border-amber-800/30 shadow flex items-center justify-center">
-          <div className="w-40 h-16 bg-amber-900/15 rounded-full border border-amber-800/20" />
+        <div className="absolute left-[800px] top-[400px] -translate-x-1/2 -translate-y-1/2 w-64 h-24 bg-amber-900/25 rounded-full border border-amber-800/30 shadow flex items-center justify-center">
+          <div className="w-56 h-16 bg-amber-900/15 rounded-full border border-amber-800/20" />
         </div>
         {TABLE_CHAIRS.map((chair) => (
           <div
@@ -334,7 +338,7 @@ export default function VirtualOffice() {
         ))}
 
         {/* Plants - multi-leaf */}
-        <div className="absolute left-[50px] top-[500px] -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
+        <div className="absolute left-[120px] top-[500px] -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
           <div className="relative w-14 h-16">
             <div className="absolute left-1 top-2 w-10 h-12 bg-emerald-600/70 rounded-full" />
             <div className="absolute left-4 top-0 w-8 h-10 bg-emerald-500/80 rounded-full" />
@@ -343,7 +347,7 @@ export default function VirtualOffice() {
           <div className="w-8 h-6 bg-amber-800/80 rounded-b border-t-2 border-amber-900/60" />
         </div>
 
-        <div className="absolute left-[750px] top-[500px] -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
+        <div className="absolute left-[1480px] top-[500px] -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
           <div className="relative w-14 h-16">
             <div className="absolute left-2 top-1 w-10 h-12 bg-emerald-600/70 rounded-full" />
             <div className="absolute left-0 top-3 w-8 h-10 bg-emerald-500/80 rounded-full" />
@@ -353,7 +357,7 @@ export default function VirtualOffice() {
         </div>
 
         {/* Coffee Bar */}
-        <div className="absolute left-[700px] top-[100px] -translate-x-1/2 -translate-y-1/2">
+        <div className="absolute left-[1440px] top-[100px] -translate-x-1/2 -translate-y-1/2">
           <div className="w-24 h-32 bg-slate-800 rounded border-2 border-slate-700 shadow-lg flex flex-col gap-2 p-2">
             <div className="h-4 bg-slate-900 rounded flex items-center justify-center">
               <CoffeeIcon className="size-3 text-amber-400/80" />
