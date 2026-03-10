@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
-import { BotIcon, MonitorIcon, CoffeeIcon } from "lucide-react";
+import { BotIcon, MonitorIcon, CoffeeIcon, FolderIcon } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import { useStore } from "../store";
 
@@ -41,11 +41,10 @@ function getRandomPOI() {
   return POIS[Math.floor(Math.random() * POIS.length)]!;
 }
 
-function getDeskLocation(index: number) {
-  const desksPerRow = 5;
-  const row = Math.floor(index / desksPerRow);
-  const col = index % desksPerRow;
-  return { x: 320 + col * 250, y: 105 + row * 155 };
+function getPathLeaf(path: string | null | undefined) {
+  if (!path) return null;
+  const segments = path.split(/[/\\]/).filter(Boolean);
+  return segments.at(-1) ?? null;
 }
 
 function jitter(num: number, amount = 15) {
@@ -72,8 +71,60 @@ interface BotState {
   thoughtEmoji: string | null;
 }
 
+interface DeskGroupLayout {
+  key: string;
+  label: string;
+  cwd: string | null;
+  deskCount: number;
+  centerX: number;
+  topY: number;
+  width: number;
+  height: number;
+}
+
+function getServerHttpOrigin() {
+  const envUrl = import.meta.env.VITE_SERVER_URL as string | undefined;
+  if (typeof window === "undefined") {
+    return envUrl?.replace(/^wss:/, "https:").replace(/^ws:/, "http:") ?? "";
+  }
+
+  const bridgeUrl = window.localStorage.getItem("serverUrl");
+  const wsUrl = bridgeUrl
+    ? bridgeUrl
+    : envUrl && envUrl.length > 0
+      ? envUrl
+      : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port}`;
+  const httpUrl = wsUrl.replace(/^wss:/, "https:").replace(/^ws:/, "http:");
+  try {
+    return new URL(httpUrl).origin;
+  } catch {
+    return httpUrl;
+  }
+}
+
+const serverHttpOrigin = getServerHttpOrigin();
+
+function ProjectOfficeIcon({ cwd }: { cwd: string | null }) {
+  const [status, setStatus] = useState<"loading" | "loaded" | "error">(cwd ? "loading" : "error");
+
+  if (!cwd || status === "error") {
+    return <FolderIcon className="size-3 shrink-0 text-muted-foreground/60" />;
+  }
+
+  return (
+    <img
+      src={`${serverHttpOrigin}/api/project-favicon?cwd=${encodeURIComponent(cwd)}`}
+      alt=""
+      className={`size-3 shrink-0 rounded-sm object-contain ${status === "loading" ? "hidden" : ""}`}
+      onLoad={() => setStatus("loaded")}
+      onError={() => setStatus("error")}
+    />
+  );
+}
+
 export default function VirtualOffice() {
   const threads = useStore((store) => store.threads);
+  const projects = useStore((store) => store.projects);
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
@@ -96,27 +147,97 @@ export default function VirtualOffice() {
     return () => observer.disconnect();
   }, []);
 
-  const bots = useMemo(() => {
-    return threads.map((thread, i) => {
-      const isActive =
-        thread.session?.status === "running" ||
-        thread.session?.orchestrationStatus === "running" ||
-        thread.latestTurn?.state === "running";
-      const isError = thread.session?.status === "error" || thread.latestTurn?.state === "error";
-      const color = BOT_COLORS[i % BOT_COLORS.length]!;
+  const { bots, deskGroups } = useMemo(() => {
+    const projectById = new Map(projects.map((project) => [project.id, project] as const));
+    const groupedThreads = new Map<
+      string,
+      {
+        key: string;
+        label: string;
+        threads: typeof threads;
+      }
+    >();
 
-      return {
-        id: thread.id,
-        title: thread.title,
-        model: thread.model,
-        status: thread.session?.orchestrationStatus ?? (thread.session?.status ?? "disconnected"),
-        deskLocation: getDeskLocation(i),
-        isActive,
-        isError,
-        color,
-      };
+    for (const thread of threads) {
+      const project = projectById.get(thread.projectId);
+      const folderPath = thread.worktreePath ?? project?.cwd ?? null;
+      const label = getPathLeaf(folderPath) ?? project?.name ?? "Unassigned";
+      const key = folderPath ?? `project:${thread.projectId}`;
+      const existing = groupedThreads.get(key);
+      if (existing) {
+        existing.threads.push(thread);
+      } else {
+        groupedThreads.set(key, {
+          key,
+          label,
+          threads: [thread],
+        });
+      }
+    }
+
+    const groupEntries = [...groupedThreads.values()];
+    const groupCount = Math.max(groupEntries.length, 1);
+    const columns = Math.min(groupCount, 3);
+    const rows = Math.ceil(groupCount / columns);
+    const horizontalStart = 360;
+    const horizontalEnd = 1160;
+    const verticalStart = 92;
+    const rowGap = rows > 1 ? 150 : 0;
+    const columnStep = columns > 1 ? (horizontalEnd - horizontalStart) / (columns - 1) : 0;
+    const clusterWidth = columns > 1 ? 300 : 420;
+    const clusterHeight = 130;
+
+    const nextDeskGroups: DeskGroupLayout[] = [];
+    const nextBots = groupEntries.flatMap((group, groupIndex) => {
+      const primaryThread = group.threads[0];
+      const primaryProject = primaryThread ? projectById.get(primaryThread.projectId) : undefined;
+      const col = columns > 1 ? groupIndex % columns : 0;
+      const row = Math.floor(groupIndex / columns);
+      const centerX = columns > 1 ? horizontalStart + col * columnStep : ROOM_WIDTH / 2;
+      const topY = verticalStart + row * rowGap;
+      nextDeskGroups.push({
+        key: group.key,
+        label: group.label,
+        cwd: primaryThread?.worktreePath ?? primaryProject?.cwd ?? null,
+        deskCount: group.threads.length,
+        centerX,
+        topY,
+        width: clusterWidth,
+        height: clusterHeight,
+      });
+
+      return group.threads.map((thread, threadIndex) => {
+        const isActive =
+          thread.session?.status === "running" ||
+          thread.session?.orchestrationStatus === "running" ||
+          thread.latestTurn?.state === "running";
+        const isError =
+          thread.session?.status === "error" || thread.latestTurn?.state === "error";
+        const color = BOT_COLORS[(groupIndex + threadIndex) % BOT_COLORS.length]!;
+        const desksPerRow = group.threads.length > 1 ? Math.min(2, group.threads.length) : 1;
+        const deskRow = Math.floor(threadIndex / desksPerRow);
+        const deskCol = threadIndex % desksPerRow;
+        const colOffset = desksPerRow === 1 ? 0 : deskCol === 0 ? -90 : 90;
+
+        return {
+          id: thread.id,
+          title: thread.title,
+          model: thread.model,
+          status: thread.session?.orchestrationStatus ?? (thread.session?.status ?? "disconnected"),
+          deskGroupLabel: group.label,
+          deskLocation: {
+            x: centerX + colOffset,
+            y: topY + 28 + deskRow * 68,
+          },
+          isActive,
+          isError,
+          color,
+        };
+      });
     });
-  }, [threads]);
+
+    return { bots: nextBots, deskGroups: nextDeskGroups };
+  }, [projects, threads]);
 
   // Per-bot position state with individual timing
   const [botStates, setBotStates] = useState<Record<string, BotState>>({});
@@ -279,12 +400,41 @@ export default function VirtualOffice() {
 
         {/* --- ENVIRONMENTAL PROPS --- */}
 
+        {deskGroups.map((group) => (
+          <div
+            key={`desk-group-${group.key}`}
+            className="pointer-events-none absolute rounded-2xl border border-border/35 bg-background/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+            style={{
+              left: group.centerX - group.width / 2,
+              top: group.topY - 34,
+              width: group.width,
+              height: group.height,
+            }}
+          >
+            <div className="absolute left-1/2 -top-12 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border/50 bg-background/95 px-3 py-1 text-[10px] font-semibold tracking-[0.12em] text-foreground/75 uppercase shadow-sm">
+              <ProjectOfficeIcon cwd={group.cwd} />
+              <span>{group.label}</span>
+            </div>
+            <div className="absolute inset-x-6 bottom-4 h-px bg-linear-to-r from-transparent via-border/40 to-transparent" />
+          </div>
+        ))}
+
         {/* Desks with chairs */}
         {bots.map((bot) => (
           <div
             key={`desk-${bot.id}`}
-            className="absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center pointer-events-none"
+            className="absolute -translate-x-1/2 -translate-y-1/2 flex cursor-pointer flex-col items-center pointer-events-auto"
             style={{ left: bot.deskLocation.x, top: bot.deskLocation.y - 18 }}
+            onClick={() => handleBotClick(bot.id)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                handleBotClick(bot.id);
+              }
+            }}
+            aria-label={`Open chat for ${bot.title}`}
           >
             <div className="mb-1 max-w-24 truncate rounded border border-border/60 bg-background/90 px-1.5 py-0.5 text-center text-[9px] font-mono text-foreground/80 shadow-sm">
               {bot.title.slice(0, 18)}
