@@ -1,13 +1,38 @@
-import { useEffect, useState, useMemo, useRef, useCallback } from "react";
-import { BotIcon, MonitorIcon, CoffeeIcon, FolderIcon } from "lucide-react";
-import { useNavigate } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  BotIcon,
+  CoffeeIcon,
+  FolderIcon,
+  MonitorIcon,
+  RotateCcwIcon,
+  ScanSearchIcon,
+} from "lucide-react";
+import type { ThreadId } from "@t3tools/contracts";
+
+import { Button } from "./ui/button";
 import { useStore } from "../store";
+import {
+  COFFEE_BAR_SNACK_IDS,
+  DESK_HEIGHT,
+  DESK_WIDTH,
+  OFFICE_DRAG_THRESHOLD_PX,
+  createDefaultOfficePersistedState,
+} from "../office/officeDefaults";
+import { fitCameraToBounds, screenToWorld, zoomAtPoint } from "../office/officeCamera";
+import { buildOfficeScene, deriveOfficeInputs } from "../office/officeLayout";
+import {
+  areOfficePersistedStatesEqual,
+  clearOfficePersistedState,
+  readOfficePersistedState,
+  writeOfficePersistedState,
+} from "../office/officePersistence";
+import type {
+  OfficeCameraState,
+  OfficeElement,
+  OfficePersistedState,
+  OfficePoint,
+} from "../office/officeTypes";
 
-// Office Configuration
-const ROOM_WIDTH = 1600;
-const ROOM_HEIGHT = 600;
-
-// Bot color palette
 const BOT_COLORS = [
   { text: "text-violet-500", bg: "bg-violet-500", ring: "ring-violet-400/60", border: "border-violet-400" },
   { text: "text-blue-500", bg: "bg-blue-500", ring: "ring-blue-400/60", border: "border-blue-400" },
@@ -21,11 +46,8 @@ const BOT_COLORS = [
   { text: "text-indigo-500", bg: "bg-indigo-500", ring: "ring-indigo-400/60", border: "border-indigo-400" },
 ] as const;
 
-// Idle thought emojis
 const THOUGHT_EMOJIS = ["\u2615", "\ud83d\udca4", "\ud83d\udca1", "\ud83c\udf3f", "\ud83c\udfb5", "\ud83d\ude80", "\ud83d\udcda", "\u2728"];
-
-// POIs (Points of Interest) for idle bots
-const POIS = [
+const IDLE_POIS = [
   { x: 180, y: 310 },
   { x: 120, y: 500 },
   { x: 1480, y: 500 },
@@ -37,31 +59,6 @@ const POIS = [
   { x: 340, y: 450 },
 ];
 
-function getRandomPOI() {
-  return POIS[Math.floor(Math.random() * POIS.length)]!;
-}
-
-function getPathLeaf(path: string | null | undefined) {
-  if (!path) return null;
-  const segments = path.split(/[/\\]/).filter(Boolean);
-  return segments.at(-1) ?? null;
-}
-
-function jitter(num: number, amount = 15) {
-  return num + (Math.random() * amount * 2 - amount);
-}
-
-function distance(a: { x: number; y: number }, b: { x: number; y: number }) {
-  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
-}
-
-// Conference table chair positions (around the oval)
-const TABLE_CHAIRS = [
-  { x: 700, y: 380 }, { x: 740, y: 365 }, { x: 860, y: 365 },
-  { x: 900, y: 380 }, { x: 900, y: 420 }, { x: 860, y: 435 },
-  { x: 740, y: 435 }, { x: 700, y: 420 },
-];
-
 interface BotState {
   x: number;
   y: number;
@@ -71,16 +68,42 @@ interface BotState {
   thoughtEmoji: string | null;
 }
 
-interface DeskGroupLayout {
-  key: string;
-  label: string;
-  cwd: string | null;
-  deskCount: number;
-  centerX: number;
-  topY: number;
-  width: number;
-  height: number;
+interface VirtualOfficeProps {
+  onThreadActivate?: (threadId: ThreadId) => void;
 }
+
+type PanState = {
+  pointerId: number;
+  startPointer: OfficePoint;
+  startCamera: OfficeCameraState;
+  moved: boolean;
+};
+
+type DragState =
+  | {
+      pointerId: number;
+      kind: "group";
+      key: string;
+      startPointer: OfficePoint;
+      startValue: OfficePoint;
+      moved: boolean;
+    }
+  | {
+      pointerId: number;
+      kind: "desk";
+      key: string;
+      startPointer: OfficePoint;
+      startValue: OfficePoint;
+      moved: boolean;
+    }
+  | {
+      pointerId: number;
+      kind: "element";
+      key: string;
+      startPointer: OfficePoint;
+      startValue: OfficePoint;
+      moved: boolean;
+    };
 
 function getServerHttpOrigin() {
   const envUrl = import.meta.env.VITE_SERVER_URL as string | undefined;
@@ -104,6 +127,43 @@ function getServerHttpOrigin() {
 
 const serverHttpOrigin = getServerHttpOrigin();
 
+function getRandomPOI() {
+  return IDLE_POIS[Math.floor(Math.random() * IDLE_POIS.length)]!;
+}
+
+function jitter(num: number, amount = 15) {
+  return num + (Math.random() * amount * 2 - amount);
+}
+
+function distance(a: { x: number; y: number }, b: { x: number; y: number }) {
+  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+}
+
+function mod(value: number, divisor: number) {
+  if (divisor === 0) {
+    return 0;
+  }
+  return ((value % divisor) + divisor) % divisor;
+}
+
+function trySetPointerCapture(element: HTMLDivElement, pointerId: number) {
+  try {
+    element.setPointerCapture(pointerId);
+  } catch {
+    return;
+  }
+}
+
+function tryReleasePointerCapture(element: HTMLDivElement, pointerId: number) {
+  try {
+    if (element.hasPointerCapture(pointerId)) {
+      element.releasePointerCapture(pointerId);
+    }
+  } catch {
+    return;
+  }
+}
+
 function ProjectOfficeIcon({ cwd }: { cwd: string | null }) {
   const [status, setStatus] = useState<"loading" | "loaded" | "error">(cwd ? "loading" : "error");
 
@@ -122,167 +182,343 @@ function ProjectOfficeIcon({ cwd }: { cwd: string | null }) {
   );
 }
 
-export default function VirtualOffice() {
+function FurnitureNode(props: {
+  element: OfficeElement;
+  onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onPointerMove: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onPointerUp: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onPointerCancel: (event: React.PointerEvent<HTMLDivElement>) => void;
+}) {
+  const { element } = props;
+
+  if (element.type === "waterCooler") {
+    return (
+      <div
+        data-office-element={element.id}
+        className="absolute flex cursor-grab flex-col items-center active:cursor-grabbing"
+        style={{ left: element.x, top: element.y, width: element.width, height: element.height }}
+        onPointerDown={props.onPointerDown}
+        onPointerMove={props.onPointerMove}
+        onPointerUp={props.onPointerUp}
+        onPointerCancel={props.onPointerCancel}
+      >
+        <div className="h-14 w-10 rounded-t-full border border-sky-300 bg-sky-200/80 shadow-inner" />
+        <div className="relative flex h-12 w-8 items-center justify-center rounded-b bg-muted-foreground/40">
+          <div className="mt-2 h-3 w-1 rounded-b bg-sky-400" />
+          <div
+            className="absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-sky-400/80"
+            style={{
+              animation: "officeDrip 2.5s ease-in-out infinite",
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (element.type === "conferenceTable") {
+    return (
+      <div
+        data-office-element={element.id}
+        className="absolute cursor-grab active:cursor-grabbing"
+        style={{ left: element.x, top: element.y, width: element.width, height: element.height }}
+        onPointerDown={props.onPointerDown}
+        onPointerMove={props.onPointerMove}
+        onPointerUp={props.onPointerUp}
+        onPointerCancel={props.onPointerCancel}
+      >
+        <div className="absolute inset-[-16px] rounded-[50%] border border-amber-700/10 bg-amber-800/10" />
+        <div className="absolute inset-0 flex items-center justify-center rounded-full border border-amber-800/30 bg-amber-900/25 shadow">
+          <div className="h-16 w-56 rounded-full border border-amber-800/20 bg-amber-900/15" />
+        </div>
+      </div>
+    );
+  }
+
+  if (element.type === "chair") {
+    return (
+      <div
+        data-office-element={element.id}
+        className="absolute cursor-grab rounded-full border border-slate-500/20 bg-slate-600/20 active:cursor-grabbing"
+        style={{ left: element.x, top: element.y, width: element.width, height: element.height }}
+        onPointerDown={props.onPointerDown}
+        onPointerMove={props.onPointerMove}
+        onPointerUp={props.onPointerUp}
+        onPointerCancel={props.onPointerCancel}
+      />
+    );
+  }
+
+  if (element.type === "plant") {
+    return (
+      <div
+        data-office-element={element.id}
+        className="absolute flex cursor-grab flex-col items-center active:cursor-grabbing"
+        style={{ left: element.x, top: element.y, width: element.width, height: element.height }}
+        onPointerDown={props.onPointerDown}
+        onPointerMove={props.onPointerMove}
+        onPointerUp={props.onPointerUp}
+        onPointerCancel={props.onPointerCancel}
+      >
+        <div className="relative h-16 w-14">
+          <div className="absolute left-1 top-2 h-12 w-10 rounded-full bg-emerald-600/70" />
+          <div className="absolute left-4 top-0 h-10 w-8 rounded-full bg-emerald-500/80" />
+          <div className="absolute left-0 top-4 h-9 w-7 rounded-full bg-emerald-400/60" />
+        </div>
+        <div className="h-6 w-8 rounded-b border-t-2 border-amber-900/60 bg-amber-800/80" />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-office-element={element.id}
+      className="absolute cursor-grab active:cursor-grabbing"
+      style={{ left: element.x, top: element.y, width: element.width, height: element.height }}
+      onPointerDown={props.onPointerDown}
+      onPointerMove={props.onPointerMove}
+      onPointerUp={props.onPointerUp}
+      onPointerCancel={props.onPointerCancel}
+    >
+      <div className="flex h-full w-full flex-col gap-2 rounded border-2 border-slate-700 bg-slate-800 p-2 shadow-lg">
+        <div className="flex h-4 items-center justify-center rounded bg-slate-900">
+          <CoffeeIcon className="size-3 text-amber-400/80" />
+        </div>
+        <div className="grid flex-1 grid-cols-2 grid-rows-3 gap-1 rounded bg-slate-900 p-1">
+          {COFFEE_BAR_SNACK_IDS.map((snackId) => (
+            <div key={snackId} className="rounded bg-amber-700/60" />
+          ))}
+        </div>
+        <div className="ml-auto flex h-8 w-full items-center gap-1 rounded bg-slate-700 px-1">
+          <div className="h-4 w-4 rounded-sm bg-green-500" />
+          <div className="ml-auto h-4 w-2 rounded-sm bg-red-500" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function VirtualOffice({ onThreadActivate }: VirtualOfficeProps) {
   const threads = useStore((store) => store.threads);
   const projects = useStore((store) => store.projects);
-  const navigate = useNavigate();
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(1);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const stateRef = useRef<OfficePersistedState | null>(null);
+  const persistTimerRef = useRef<number | null>(null);
+  const previousViewportSizeRef = useRef({ width: 0, height: 0 });
+  const suppressClickUntilRef = useRef(0);
+  const panStateRef = useRef<PanState | null>(null);
+  const dragStateRef = useRef<DragState | null>(null);
+  const [initialPersistedState] = useState<OfficePersistedState | null>(() => readOfficePersistedState());
+  const [officeState, setOfficeState] = useState<OfficePersistedState>(
+    () => initialPersistedState ?? createDefaultOfficePersistedState(),
+  );
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [hoveredBotId, setHoveredBotId] = useState<string | null>(null);
+  const [isInteracting, setIsInteracting] = useState(false);
+  const shouldFitCameraRef = useRef(initialPersistedState === null);
 
-  // Responsive scaling
+  stateRef.current = officeState;
+
+  const officeInputs = useMemo(() => deriveOfficeInputs(projects, threads), [projects, threads]);
+  const { scene, persistedState: normalizedPersistedState } = useMemo(
+    () =>
+      buildOfficeScene({
+        groups: officeInputs.groups,
+        desks: officeInputs.desks,
+        persistedState: officeState,
+      }),
+    [officeInputs, officeState],
+  );
+
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    if (areOfficePersistedStatesEqual(officeState, normalizedPersistedState)) {
+      return;
+    }
+    setOfficeState(normalizedPersistedState);
+  }, [normalizedPersistedState, officeState]);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
 
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
-      if (!entry) return;
-      const { width, height } = entry.contentRect;
-      const s = Math.min(width / ROOM_WIDTH, height / ROOM_HEIGHT, 1.5);
-      setScale(Math.max(0.3, s));
+      if (!entry) {
+        return;
+      }
+      setViewportSize({
+        width: entry.contentRect.width,
+        height: entry.contentRect.height,
+      });
     });
 
-    observer.observe(container);
+    observer.observe(viewport);
     return () => observer.disconnect();
   }, []);
 
-  const { bots, deskGroups } = useMemo(() => {
-    const projectById = new Map(projects.map((project) => [project.id, project] as const));
-    const groupedThreads = new Map<
-      string,
-      {
-        key: string;
-        label: string;
-        threads: typeof threads;
-      }
-    >();
+  const fitCameraToScene = useCallback(() => {
+    if (viewportSize.width <= 0 || viewportSize.height <= 0) {
+      return;
+    }
+    setOfficeState((current) => ({
+      ...current,
+      camera: fitCameraToBounds({
+        bounds: scene.bounds,
+        viewport: viewportSize,
+      }),
+    }));
+  }, [scene.bounds, viewportSize]);
 
-    for (const thread of threads) {
-      const project = projectById.get(thread.projectId);
-      const folderPath = thread.worktreePath ?? project?.cwd ?? null;
-      const label = getPathLeaf(folderPath) ?? project?.name ?? "Unassigned";
-      const key = folderPath ?? `project:${thread.projectId}`;
-      const existing = groupedThreads.get(key);
-      if (existing) {
-        existing.threads.push(thread);
-      } else {
-        groupedThreads.set(key, {
-          key,
-          label,
-          threads: [thread],
-        });
-      }
+  useEffect(() => {
+    const previousViewportSize = previousViewportSizeRef.current;
+    if (viewportSize.width <= 0 || viewportSize.height <= 0) {
+      return;
     }
 
-    const groupEntries = [...groupedThreads.values()];
-    const groupCount = Math.max(groupEntries.length, 1);
-    const columns = Math.min(groupCount, 3);
-    const rows = Math.ceil(groupCount / columns);
-    const horizontalStart = 360;
-    const horizontalEnd = 1160;
-    const verticalStart = 92;
-    const rowGap = rows > 1 ? 150 : 0;
-    const columnStep = columns > 1 ? (horizontalEnd - horizontalStart) / (columns - 1) : 0;
-    const clusterWidth = columns > 1 ? 300 : 420;
-    const clusterHeight = 130;
+    if (shouldFitCameraRef.current) {
+      shouldFitCameraRef.current = false;
+      previousViewportSizeRef.current = viewportSize;
+      setOfficeState((current) => ({
+        ...current,
+        camera: fitCameraToBounds({
+          bounds: scene.bounds,
+          viewport: viewportSize,
+        }),
+      }));
+      return;
+    }
 
-    const nextDeskGroups: DeskGroupLayout[] = [];
-    const nextBots = groupEntries.flatMap((group, groupIndex) => {
-      const primaryThread = group.threads[0];
-      const primaryProject = primaryThread ? projectById.get(primaryThread.projectId) : undefined;
-      const col = columns > 1 ? groupIndex % columns : 0;
-      const row = Math.floor(groupIndex / columns);
-      const centerX = columns > 1 ? horizontalStart + col * columnStep : ROOM_WIDTH / 2;
-      const topY = verticalStart + row * rowGap;
-      nextDeskGroups.push({
-        key: group.key,
-        label: group.label,
-        cwd: primaryThread?.worktreePath ?? primaryProject?.cwd ?? null,
-        deskCount: group.threads.length,
-        centerX,
-        topY,
-        width: clusterWidth,
-        height: clusterHeight,
-      });
-
-      return group.threads.map((thread, threadIndex) => {
-        const isActive =
-          thread.session?.status === "running" ||
-          thread.session?.orchestrationStatus === "running" ||
-          thread.latestTurn?.state === "running";
-        const isError =
-          thread.session?.status === "error" || thread.latestTurn?.state === "error";
-        const color = BOT_COLORS[(groupIndex + threadIndex) % BOT_COLORS.length]!;
-        const desksPerRow = group.threads.length > 1 ? Math.min(2, group.threads.length) : 1;
-        const deskRow = Math.floor(threadIndex / desksPerRow);
-        const deskCol = threadIndex % desksPerRow;
-        const colOffset = desksPerRow === 1 ? 0 : deskCol === 0 ? -90 : 90;
-
-        return {
-          id: thread.id,
-          title: thread.title,
-          model: thread.model,
-          status: thread.session?.orchestrationStatus ?? (thread.session?.status ?? "disconnected"),
-          deskGroupLabel: group.label,
-          deskLocation: {
-            x: centerX + colOffset,
-            y: topY + 28 + deskRow * 68,
+    if (
+      previousViewportSize.width > 0 &&
+      previousViewportSize.height > 0 &&
+      (previousViewportSize.width !== viewportSize.width ||
+        previousViewportSize.height !== viewportSize.height)
+    ) {
+      setOfficeState((current) => {
+        const centerWorld = screenToWorld(
+          {
+            x: previousViewportSize.width / 2,
+            y: previousViewportSize.height / 2,
           },
-          isActive,
-          isError,
-          color,
+          current.camera,
+        );
+        return {
+          ...current,
+          camera: {
+            zoom: current.camera.zoom,
+            x: viewportSize.width / 2 - centerWorld.x * current.camera.zoom,
+            y: viewportSize.height / 2 - centerWorld.y * current.camera.zoom,
+          },
         };
       });
-    });
+    }
 
-    return { bots: nextBots, deskGroups: nextDeskGroups };
-  }, [projects, threads]);
+    previousViewportSizeRef.current = viewportSize;
+  }, [scene.bounds, viewportSize]);
 
-  // Per-bot position state with individual timing
+  useEffect(() => {
+    if (persistTimerRef.current !== null) {
+      window.clearTimeout(persistTimerRef.current);
+    }
+    persistTimerRef.current = window.setTimeout(() => {
+      writeOfficePersistedState(officeState);
+      persistTimerRef.current = null;
+    }, 120);
+
+    return () => {
+      if (persistTimerRef.current !== null) {
+        window.clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+      }
+    };
+  }, [officeState]);
+
+  useEffect(() => {
+    return () => {
+      const currentState = stateRef.current;
+      if (currentState) {
+        writeOfficePersistedState(currentState);
+      }
+      document.body.style.removeProperty("cursor");
+      document.body.style.removeProperty("user-select");
+    };
+  }, []);
+
+  const deskByThreadId = useMemo(
+    () => new Map(scene.desks.map((desk) => [desk.threadId, desk] as const)),
+    [scene.desks],
+  );
+  const bots = useMemo(
+    () =>
+      officeInputs.desks
+        .map((desk) => {
+          const deskScene = deskByThreadId.get(desk.threadId);
+          if (!deskScene) {
+            return null;
+          }
+          return {
+            ...desk,
+            deskLocation: deskScene.botTarget,
+          };
+        })
+        .filter((desk): desk is NonNullable<typeof desk> => desk !== null),
+    [deskByThreadId, officeInputs.desks],
+  );
+
   const [botStates, setBotStates] = useState<Record<string, BotState>>({});
 
-  // Initialize new bots
   useEffect(() => {
-    setBotStates((prev) => {
-      const next = { ...prev };
+    setBotStates((previous) => {
+      const next = { ...previous };
       let changed = false;
-      for (const bot of bots) {
-        if (!next[bot.id]) {
-          next[bot.id] = {
-            x: bot.deskLocation.x,
-            y: bot.deskLocation.y,
-            nextMoveTime: Date.now() + 1000 + Math.random() * 2000,
-            transitionMs: 2000,
-            facingLeft: false,
-            thoughtEmoji: null,
-          };
+      const activeBotIds = new Set(bots.map((bot) => bot.threadId));
+
+      for (const key of Object.keys(next)) {
+        if (!activeBotIds.has(key)) {
+          delete next[key];
           changed = true;
         }
       }
-      return changed ? next : prev;
+
+      for (const bot of bots) {
+        if (next[bot.threadId]) {
+          continue;
+        }
+        next[bot.threadId] = {
+          x: bot.deskLocation.x,
+          y: bot.deskLocation.y,
+          nextMoveTime: Date.now() + 1000 + Math.random() * 2000,
+          transitionMs: 2000,
+          facingLeft: false,
+          thoughtEmoji: null,
+        };
+        changed = true;
+      }
+
+      return changed ? next : previous;
     });
   }, [bots]);
 
-  // Movement loop - checks every 500ms, moves bots individually
   useEffect(() => {
     const intervalId = setInterval(() => {
       const now = Date.now();
-
-      setBotStates((prev) => {
-        const next = { ...prev };
+      setBotStates((previous) => {
+        const next = { ...previous };
         let changed = false;
 
         for (const bot of bots) {
-          const state = prev[bot.id];
-          if (!state || now < state.nextMoveTime) continue;
+          const state = previous[bot.threadId];
+          if (!state || now < state.nextMoveTime) {
+            continue;
+          }
 
           if (bot.isActive) {
-            // Active: go to desk, subtle jiggle
-            const atDesk = Math.abs(state.x - bot.deskLocation.x) < 5 && Math.abs(state.y - bot.deskLocation.y) < 5;
+            const atDesk =
+              Math.abs(state.x - bot.deskLocation.x) < 5 &&
+              Math.abs(state.y - bot.deskLocation.y) < 5;
             if (!atDesk) {
               const dist = distance(state, bot.deskLocation);
-              next[bot.id] = {
+              next[bot.threadId] = {
                 ...state,
                 x: bot.deskLocation.x,
                 y: bot.deskLocation.y,
@@ -292,8 +528,7 @@ export default function VirtualOffice() {
                 thoughtEmoji: null,
               };
             } else {
-              // Tiny jiggle at desk
-              next[bot.id] = {
+              next[bot.threadId] = {
                 ...state,
                 x: bot.deskLocation.x + (Math.random() > 0.5 ? -1.5 : 1.5),
                 y: bot.deskLocation.y,
@@ -303,115 +538,350 @@ export default function VirtualOffice() {
               };
             }
             changed = true;
-          } else {
-            // Idle: 30% chance to stay put
-            if (Math.random() < 0.3) {
-              next[bot.id] = {
-                ...state,
-                nextMoveTime: now + 2000 + Math.random() * 2000,
-                thoughtEmoji: Math.random() < 0.25
-                  ? THOUGHT_EMOJIS[Math.floor(Math.random() * THOUGHT_EMOJIS.length)]!
-                  : null,
-              };
-              changed = true;
-            } else {
-              const target = getRandomPOI();
-              const dest = { x: jitter(target.x, 25), y: jitter(target.y, 25) };
-              const dist = distance(state, dest);
-              const ms = Math.max(1500, dist * 5);
-              next[bot.id] = {
-                ...state,
-                x: dest.x,
-                y: dest.y,
-                transitionMs: ms,
-                nextMoveTime: now + ms + 500 + Math.random() * 2000,
-                facingLeft: dest.x < state.x,
-                thoughtEmoji: Math.random() < 0.15
-                  ? THOUGHT_EMOJIS[Math.floor(Math.random() * THOUGHT_EMOJIS.length)]!
-                  : null,
-              };
-              changed = true;
-            }
+            continue;
           }
+
+          if (Math.random() < 0.3) {
+            next[bot.threadId] = {
+              ...state,
+              nextMoveTime: now + 2000 + Math.random() * 2000,
+              thoughtEmoji:
+                Math.random() < 0.25
+                  ? THOUGHT_EMOJIS[Math.floor(Math.random() * THOUGHT_EMOJIS.length)]!
+                  : null,
+            };
+            changed = true;
+            continue;
+          }
+
+          const target = getRandomPOI();
+          const destination = { x: jitter(target.x, 25), y: jitter(target.y, 25) };
+          const dist = distance(state, destination);
+          const transitionMs = Math.max(1500, dist * 5);
+          next[bot.threadId] = {
+            ...state,
+            x: destination.x,
+            y: destination.y,
+            transitionMs,
+            nextMoveTime: now + transitionMs + 500 + Math.random() * 2000,
+            facingLeft: destination.x < state.x,
+            thoughtEmoji:
+              Math.random() < 0.15
+                ? THOUGHT_EMOJIS[Math.floor(Math.random() * THOUGHT_EMOJIS.length)]!
+                : null,
+          };
+          changed = true;
         }
 
-        return changed ? next : prev;
+        return changed ? next : previous;
       });
     }, 500);
 
     return () => clearInterval(intervalId);
   }, [bots]);
 
-  const handleBotClick = useCallback(
-    (threadId: string) => {
-      void navigate({ to: "/$threadId", params: { threadId } });
+  const shouldSuppressClick = useCallback(() => performance.now() < suppressClickUntilRef.current, []);
+
+  const handleThreadClick = useCallback(
+    (threadId: ThreadId) => {
+      if (shouldSuppressClick()) {
+        return;
+      }
+      if (onThreadActivate) {
+        onThreadActivate(threadId);
+        return;
+      }
+      window.location.hash = `#/${threadId}`;
     },
-    [navigate],
+    [onThreadActivate, shouldSuppressClick],
   );
+
+  const beginDrag = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>, nextDragState: DragState) => {
+      if (event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      trySetPointerCapture(event.currentTarget, event.pointerId);
+      dragStateRef.current = nextDragState;
+      setIsInteracting(true);
+      setHoveredBotId(null);
+      document.body.style.cursor = "grabbing";
+      document.body.style.userSelect = "none";
+    },
+    [],
+  );
+
+  const endInteraction = useCallback(() => {
+    dragStateRef.current = null;
+    panStateRef.current = null;
+    setIsInteracting(false);
+    document.body.style.removeProperty("cursor");
+    document.body.style.removeProperty("user-select");
+  }, []);
+
+  const handleViewportPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 1) {
+        return;
+      }
+      event.preventDefault();
+      trySetPointerCapture(event.currentTarget, event.pointerId);
+      panStateRef.current = {
+        pointerId: event.pointerId,
+        startPointer: {
+          x: event.clientX,
+          y: event.clientY,
+        },
+        startCamera: officeState.camera,
+        moved: false,
+      };
+      setIsInteracting(true);
+      setHoveredBotId(null);
+      document.body.style.cursor = "grabbing";
+      document.body.style.userSelect = "none";
+    },
+    [officeState.camera],
+  );
+
+  const handleViewportPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const panState = panStateRef.current;
+    if (!panState || panState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    const dx = event.clientX - panState.startPointer.x;
+    const dy = event.clientY - panState.startPointer.y;
+    if (!panState.moved && Math.hypot(dx, dy) >= OFFICE_DRAG_THRESHOLD_PX) {
+      panState.moved = true;
+    }
+
+    setOfficeState((current) => ({
+      ...current,
+      camera: {
+        ...current.camera,
+        x: panState.startCamera.x + dx,
+        y: panState.startCamera.y + dy,
+      },
+    }));
+  }, []);
+
+  const handleViewportPointerEnd = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const panState = panStateRef.current;
+      if (!panState || panState.pointerId !== event.pointerId) {
+        return;
+      }
+      if (panState.moved) {
+        suppressClickUntilRef.current = performance.now() + 250;
+      }
+      tryReleasePointerCapture(event.currentTarget, event.pointerId);
+      endInteraction();
+    },
+    [endInteraction],
+  );
+
+  const handleDragPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const dragState = dragStateRef.current;
+      if (!dragState || dragState.pointerId !== event.pointerId) {
+        return;
+      }
+      event.preventDefault();
+      const dx = event.clientX - dragState.startPointer.x;
+      const dy = event.clientY - dragState.startPointer.y;
+      if (!dragState.moved && Math.hypot(dx, dy) >= OFFICE_DRAG_THRESHOLD_PX) {
+        dragState.moved = true;
+      }
+      const worldDx = dx / officeState.camera.zoom;
+      const worldDy = dy / officeState.camera.zoom;
+
+      setOfficeState((current) => {
+        const nextPoint = {
+          x: Math.round(dragState.startValue.x + worldDx),
+          y: Math.round(dragState.startValue.y + worldDy),
+        };
+
+        if (dragState.kind === "group") {
+          const currentAnchor = current.projectGroupAnchors[dragState.key] ?? dragState.startValue;
+          if (currentAnchor.x === nextPoint.x && currentAnchor.y === nextPoint.y) {
+            return current;
+          }
+          return {
+            ...current,
+            projectGroupAnchors: {
+              ...current.projectGroupAnchors,
+              [dragState.key]: nextPoint,
+            },
+          };
+        }
+
+        if (dragState.kind === "desk") {
+          const currentOffset = current.deskOffsetsByThreadId[dragState.key] ?? dragState.startValue;
+          if (currentOffset.x === nextPoint.x && currentOffset.y === nextPoint.y) {
+            return current;
+          }
+          return {
+            ...current,
+            deskOffsetsByThreadId: {
+              ...current.deskOffsetsByThreadId,
+              [dragState.key]: nextPoint,
+            },
+          };
+        }
+
+        const currentElement = current.elementsById[dragState.key] ?? dragState.startValue;
+        if (currentElement.x === nextPoint.x && currentElement.y === nextPoint.y) {
+          return current;
+        }
+        return {
+          ...current,
+          elementsById: {
+            ...current.elementsById,
+            [dragState.key]: nextPoint,
+          },
+        };
+      });
+    },
+    [officeState.camera.zoom],
+  );
+
+  const handleDragPointerEnd = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const dragState = dragStateRef.current;
+      if (!dragState || dragState.pointerId !== event.pointerId) {
+        return;
+      }
+      if (dragState.moved) {
+        suppressClickUntilRef.current = performance.now() + 250;
+      }
+      tryReleasePointerCapture(event.currentTarget, event.pointerId);
+      endInteraction();
+    },
+    [endInteraction],
+  );
+
+  const handleWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const viewportRect = viewportRef.current?.getBoundingClientRect();
+    if (!viewportRect) {
+      return;
+    }
+    const screenPoint = {
+      x: event.clientX - viewportRect.left,
+      y: event.clientY - viewportRect.top,
+    };
+    const zoomMultiplier = Math.exp(-event.deltaY * 0.0015);
+    setOfficeState((current) => ({
+      ...current,
+      camera: zoomAtPoint({
+        camera: current.camera,
+        nextZoom: current.camera.zoom * zoomMultiplier,
+        screenPoint,
+      }),
+    }));
+  }, []);
+
+  const resetLayout = useCallback(() => {
+    clearOfficePersistedState();
+    shouldFitCameraRef.current = true;
+    previousViewportSizeRef.current = { width: 0, height: 0 };
+    setOfficeState(createDefaultOfficePersistedState());
+  }, []);
+
+  const camera = officeState.camera;
+  const gridColumn = 80 * camera.zoom;
+  const gridRow = 40 * camera.zoom;
+  const backgroundStyle = {
+    backgroundImage: `
+      radial-gradient(circle at top, rgba(120, 140, 255, 0.08), transparent 36%),
+      repeating-linear-gradient(
+        90deg,
+        transparent,
+        transparent ${Math.max(gridColumn - 2, 1)}px,
+        color-mix(in srgb, var(--color-border) 58%, transparent) ${Math.max(gridColumn - 2, 1)}px,
+        color-mix(in srgb, var(--color-border) 58%, transparent) ${gridColumn}px
+      ),
+      repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent ${Math.max(gridRow - 2, 1)}px,
+        color-mix(in srgb, var(--color-border) 40%, transparent) ${Math.max(gridRow - 2, 1)}px,
+        color-mix(in srgb, var(--color-border) 40%, transparent) ${gridRow}px
+      )
+    `,
+    backgroundPosition: `0 0, ${mod(camera.x, gridColumn)}px 0, 0 ${mod(camera.y, gridRow)}px`,
+  } satisfies React.CSSProperties;
 
   return (
     <div
-      ref={containerRef}
-      className="relative w-full h-full flex items-center justify-center bg-background overflow-hidden"
+      ref={viewportRef}
+      data-testid="virtual-office-viewport"
+      data-camera-x={camera.x}
+      data-camera-y={camera.y}
+      data-camera-zoom={camera.zoom}
+      className={`relative h-full w-full overflow-hidden bg-background ${isInteracting ? "cursor-grabbing" : ""}`}
+      style={backgroundStyle}
+      onWheel={handleWheel}
+      onPointerDown={handleViewportPointerDown}
+      onPointerMove={handleViewportPointerMove}
+      onPointerUp={handleViewportPointerEnd}
+      onPointerCancel={handleViewportPointerEnd}
     >
-        <div
-          className="relative rounded-lg border border-border/50 bg-secondary/20 overflow-hidden shadow-2xl"
-          style={{
-            width: ROOM_WIDTH,
-            height: ROOM_HEIGHT,
-            transform: `scale(${scale})`,
-            transformOrigin: "center center",
-          }}
-        >
-        {/* Floor - wood plank pattern */}
-        <div
-          className="absolute inset-0 opacity-[0.08] pointer-events-none"
-          style={{
-            backgroundImage: `
-              repeating-linear-gradient(
-                90deg,
-                transparent,
-                transparent 78px,
-                var(--color-border) 78px,
-                var(--color-border) 80px
-              ),
-              repeating-linear-gradient(
-                0deg,
-                transparent,
-                transparent 38px,
-                var(--color-border) 38px,
-                var(--color-border) 40px
-              )
-            `,
-          }}
-        />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-linear-to-t from-background via-background/70 to-transparent" />
 
-        {/* Wall edges */}
-        <div className="absolute top-0 left-0 w-full h-1.5 bg-muted-foreground/20" />
-        <div className="absolute top-0 left-0 w-1.5 h-full bg-muted-foreground/20" />
-
-        {/* Rug under conference table */}
-          <div
-            className="absolute pointer-events-none"
-            style={{ left: 650, top: 355, width: 300, height: 100 }}
-          >
-          <div className="w-full h-full bg-amber-800/10 rounded-[50%] border border-amber-700/10" />
+      <div className="pointer-events-none absolute left-4 top-4 z-20 flex gap-2">
+        <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-border/60 bg-background/90 px-2 py-1 text-[11px] font-medium shadow-lg backdrop-blur-sm">
+          <span className="text-muted-foreground">Zoom</span>
+          <span>{Math.round(camera.zoom * 100)}%</span>
         </div>
+        <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-border/60 bg-background/90 p-1 shadow-lg backdrop-blur-sm">
+          <Button size="sm" variant="ghost" onClick={fitCameraToScene}>
+            <ScanSearchIcon className="size-4" />
+            Fit to content
+          </Button>
+          <Button size="sm" variant="ghost" onClick={resetLayout}>
+            <RotateCcwIcon className="size-4" />
+            Reset layout
+          </Button>
+        </div>
+      </div>
 
-        {/* --- ENVIRONMENTAL PROPS --- */}
-
-        {deskGroups.map((group) => (
+      <div
+        className="absolute left-0 top-0 will-change-transform"
+        style={{
+          transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`,
+          transformOrigin: "0 0",
+        }}
+      >
+        {scene.groups.map((group) => (
           <div
-            key={`desk-group-${group.key}`}
-            className="pointer-events-none absolute rounded-2xl border border-border/35 bg-background/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+            key={group.key}
+            data-office-group={group.key}
+            className="absolute rounded-2xl border border-border/35 bg-background/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
             style={{
-              left: group.centerX - group.width / 2,
-              top: group.topY - 34,
-              width: group.width,
-              height: group.height,
+              left: group.element.x,
+              top: group.element.y,
+              width: group.element.width,
+              height: group.element.height,
             }}
+            onPointerDown={(event) =>
+              beginDrag(event, {
+                pointerId: event.pointerId,
+                kind: "group",
+                key: group.key,
+                startPointer: { x: event.clientX, y: event.clientY },
+                startValue: { x: group.anchor.x, y: group.anchor.y },
+                moved: false,
+              })
+            }
+            onPointerMove={handleDragPointerMove}
+            onPointerUp={handleDragPointerEnd}
+            onPointerCancel={handleDragPointerEnd}
           >
-            <div className="absolute left-1/2 -top-12 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border/50 bg-background/95 px-3 py-1 text-[10px] font-semibold tracking-[0.12em] text-foreground/75 uppercase shadow-sm">
+            <div className="absolute left-1/2 top-0 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-full border border-border/50 bg-background/95 px-3 py-1 text-[10px] font-semibold tracking-[0.12em] text-foreground/75 uppercase shadow-sm">
               <ProjectOfficeIcon cwd={group.cwd} />
               <span>{group.label}</span>
             </div>
@@ -419,145 +889,123 @@ export default function VirtualOffice() {
           </div>
         ))}
 
-        {/* Desks with chairs */}
-        {bots.map((bot) => (
+        {scene.furniture.map((element) => (
+          <FurnitureNode
+            key={element.id}
+            element={element}
+            onPointerDown={(event) =>
+              beginDrag(event, {
+                pointerId: event.pointerId,
+                kind: "element",
+                key: element.id,
+                startPointer: { x: event.clientX, y: event.clientY },
+                startValue: { x: element.x, y: element.y },
+                moved: false,
+              })
+            }
+            onPointerMove={handleDragPointerMove}
+            onPointerUp={handleDragPointerEnd}
+            onPointerCancel={handleDragPointerEnd}
+          />
+        ))}
+
+        {scene.desks.map((desk) => (
           <div
-            key={`desk-${bot.id}`}
-            className="absolute -translate-x-1/2 -translate-y-1/2 flex cursor-pointer flex-col items-center pointer-events-auto"
-            style={{ left: bot.deskLocation.x, top: bot.deskLocation.y - 18 }}
-            onClick={() => handleBotClick(bot.id)}
+            key={desk.threadId}
+            data-office-desk={desk.threadId}
+            className="absolute flex cursor-pointer flex-col items-center"
+            style={{
+              left: desk.element.x,
+              top: desk.element.y,
+              width: DESK_WIDTH,
+              height: DESK_HEIGHT,
+            }}
+            onPointerDown={(event) =>
+              beginDrag(event, {
+                pointerId: event.pointerId,
+                kind: "desk",
+                key: desk.threadId,
+                startPointer: { x: event.clientX, y: event.clientY },
+                startValue: officeState.deskOffsetsByThreadId[desk.threadId] ?? { x: 0, y: 0 },
+                moved: false,
+              })
+            }
+            onPointerMove={handleDragPointerMove}
+            onPointerUp={handleDragPointerEnd}
+            onPointerCancel={handleDragPointerEnd}
+            onClick={() => handleThreadClick(desk.threadId as ThreadId)}
             role="button"
             tabIndex={0}
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
-                handleBotClick(bot.id);
+                handleThreadClick(desk.threadId as ThreadId);
               }
             }}
-            aria-label={`Open chat for ${bot.title}`}
+            aria-label={`Open chat for ${desk.title}`}
           >
+            {desk.needsAttention && (
+              <div className="absolute left-1/2 top-5 z-10 flex -translate-x-1/2 -translate-y-full items-center justify-center">
+                <span className="absolute inline-flex h-7 w-7 animate-ping rounded-full bg-amber-400/25" />
+                <span className="relative inline-flex h-7 w-7 items-center justify-center rounded-full border border-amber-300/70 bg-amber-400/20 text-[13px] font-bold text-amber-200 shadow-lg">
+                  ?
+                </span>
+              </div>
+            )}
             <div className="mb-1 max-w-24 truncate rounded border border-border/60 bg-background/90 px-1.5 py-0.5 text-center text-[9px] font-mono text-foreground/80 shadow-sm">
-              {bot.title.slice(0, 18)}
-              {bot.title.length > 18 ? "..." : ""}
+              {desk.title.slice(0, 18)}
+              {desk.title.length > 18 ? "..." : ""}
             </div>
-            {/* Monitor on stand */}
             <div className="flex flex-col items-center">
-              <div className="w-10 h-7 bg-slate-700/60 rounded-sm border border-slate-600/50 flex items-center justify-center">
+              <div className="flex h-7 w-10 items-center justify-center rounded-sm border border-slate-600/50 bg-slate-700/60">
                 <MonitorIcon className="size-4 text-blue-400/70" />
               </div>
-              <div className="w-1 h-1.5 bg-slate-600/50" />
-              <div className="w-4 h-0.5 bg-slate-600/50 rounded" />
+              <div className="h-1.5 w-1 bg-slate-600/50" />
+              <div className="h-0.5 w-4 rounded bg-slate-600/50" />
             </div>
-            {/* Desk surface */}
-            <div className="w-20 h-3 bg-amber-900/30 rounded-sm border-t border-amber-800/40 mt-0.5" />
-            {/* Desk legs */}
-            <div className="flex justify-between w-18 -mt-px">
-              <div className="w-1 h-3 bg-amber-900/25" />
-              <div className="w-1 h-3 bg-amber-900/25" />
+            <div className="mt-0.5 h-3 w-20 rounded-sm border-t border-amber-800/40 bg-amber-900/30" />
+            <div className="-mt-px flex w-[72px] justify-between">
+              <div className="h-3 w-1 bg-amber-900/25" />
+              <div className="h-3 w-1 bg-amber-900/25" />
             </div>
-            {/* Chair */}
-            <div className="w-8 h-5 bg-slate-600/20 rounded-t-lg border border-slate-500/20 mt-1" />
+            <div className="mt-1 h-5 w-8 rounded-t-lg border border-slate-500/20 bg-slate-600/20" />
           </div>
         ))}
 
-        {/* Water Cooler with drip */}
-        <div className="absolute left-[180px] top-[300px] -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
-          <div className="w-10 h-14 bg-sky-200/80 rounded-t-full shadow-inner border border-sky-300" />
-          <div className="w-8 h-12 bg-muted-foreground/40 rounded-b flex items-center justify-center relative">
-            <div className="w-1 h-3 bg-sky-400 rounded-b mt-2" />
-            {/* Drip animation */}
-            <div
-              className="absolute bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-sky-400/80"
-              style={{
-                animation: "drip 2.5s ease-in-out infinite",
-              }}
-            />
-          </div>
-        </div>
-
-        {/* Conference Table with chairs */}
-        <div className="absolute left-[800px] top-[400px] -translate-x-1/2 -translate-y-1/2 w-64 h-24 bg-amber-900/25 rounded-full border border-amber-800/30 shadow flex items-center justify-center">
-          <div className="w-56 h-16 bg-amber-900/15 rounded-full border border-amber-800/20" />
-        </div>
-        {TABLE_CHAIRS.map((chair) => (
-          <div
-            key={`chair-${chair.x}-${chair.y}`}
-            className="absolute w-4 h-4 rounded-full bg-slate-600/20 border border-slate-500/20 -translate-x-1/2 -translate-y-1/2"
-            style={{ left: chair.x, top: chair.y }}
-          />
-        ))}
-
-        {/* Plants - multi-leaf */}
-        <div className="absolute left-[120px] top-[500px] -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
-          <div className="relative w-14 h-16">
-            <div className="absolute left-1 top-2 w-10 h-12 bg-emerald-600/70 rounded-full" />
-            <div className="absolute left-4 top-0 w-8 h-10 bg-emerald-500/80 rounded-full" />
-            <div className="absolute left-0 top-4 w-7 h-9 bg-emerald-400/60 rounded-full" />
-          </div>
-          <div className="w-8 h-6 bg-amber-800/80 rounded-b border-t-2 border-amber-900/60" />
-        </div>
-
-        <div className="absolute left-[1480px] top-[500px] -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
-          <div className="relative w-14 h-16">
-            <div className="absolute left-2 top-1 w-10 h-12 bg-emerald-600/70 rounded-full" />
-            <div className="absolute left-0 top-3 w-8 h-10 bg-emerald-500/80 rounded-full" />
-            <div className="absolute left-5 top-0 w-7 h-9 bg-emerald-400/60 rounded-full" />
-          </div>
-          <div className="w-8 h-6 bg-amber-800/80 rounded-b border-t-2 border-amber-900/60" />
-        </div>
-
-        {/* Coffee Bar */}
-        <div className="absolute left-[1440px] top-[100px] -translate-x-1/2 -translate-y-1/2">
-          <div className="w-24 h-32 bg-slate-800 rounded border-2 border-slate-700 shadow-lg flex flex-col gap-2 p-2">
-            <div className="h-4 bg-slate-900 rounded flex items-center justify-center">
-              <CoffeeIcon className="size-3 text-amber-400/80" />
-            </div>
-            <div className="flex-1 bg-slate-900 rounded grid grid-cols-2 grid-rows-3 gap-1 p-1">
-              {[...Array(6)].map((_, idx) => (
-                <div key={`snack-${idx}`} className="bg-amber-700/60 rounded block" />
-              ))}
-            </div>
-            <div className="h-8 bg-slate-700 rounded flex items-center px-1 gap-1">
-              <div className="w-4 h-4 bg-green-500 rounded-sm" />
-              <div className="w-2 h-4 bg-red-500 rounded-sm ml-auto" />
-            </div>
-          </div>
-        </div>
-
-        {/* --- BOTS (Dynamic) --- */}
         {bots.map((bot) => {
-          const state = botStates[bot.id];
-          const pos = state ?? { x: bot.deskLocation.x, y: bot.deskLocation.y };
+          const state = botStates[bot.threadId];
+          const position = state ?? { x: bot.deskLocation.x, y: bot.deskLocation.y };
           const transitionMs = state?.transitionMs ?? 2000;
           const facingLeft = state?.facingLeft ?? false;
           const thoughtEmoji = state?.thoughtEmoji ?? null;
-          const isHovered = hoveredBotId === bot.id;
+          const isHovered = !isInteracting && hoveredBotId === bot.threadId;
+          const color = BOT_COLORS[bot.colorIndex % BOT_COLORS.length]!;
 
           return (
             <div
-              key={bot.id}
-              className="absolute top-0 left-0 flex flex-col items-center cursor-pointer group"
+              key={bot.threadId}
+              className="absolute left-0 top-0 flex w-10 cursor-pointer flex-col items-center group"
               style={{
-                transform: `translate(${pos.x - 20}px, ${pos.y - 30}px)`,
+                transform: `translate(${position.x - 20}px, ${position.y - 30}px)`,
                 transition: `transform ${transitionMs}ms ease-in-out`,
-                zIndex: isHovered ? 9999 : Math.round(pos.y),
-                width: 40,
+                zIndex: isHovered ? 9999 : Math.round(position.y),
               }}
-              onClick={() => handleBotClick(bot.id)}
-              onMouseEnter={() => setHoveredBotId(bot.id)}
+              onClick={() => handleThreadClick(bot.threadId as ThreadId)}
+              onMouseEnter={() => setHoveredBotId(bot.threadId)}
               onMouseLeave={() => setHoveredBotId(null)}
+              data-office-bot={bot.threadId}
             >
-              {/* Hover Info Card */}
               {isHovered && (
                 <div
-                  className={`absolute ${pos.y < 80 ? "top-full mt-2" : "bottom-full mb-2"} left-1/2 -translate-x-1/2 bg-popover border border-border rounded-lg shadow-lg p-2.5 text-xs pointer-events-none whitespace-nowrap z-10`}
+                  className={`absolute left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-border bg-popover p-2.5 text-xs shadow-lg ${position.y < 80 ? "top-full mt-2" : "bottom-full mb-2"}`}
                 >
-                  <div className="font-semibold text-foreground mb-1">
-                    {bot.title.slice(0, 30)}{bot.title.length > 30 ? "..." : ""}
+                  <div className="mb-1 font-semibold text-foreground">
+                    {bot.title.slice(0, 30)}
+                    {bot.title.length > 30 ? "..." : ""}
                   </div>
-                  <div className="flex items-center gap-1.5 mb-1">
+                  <div className="mb-1 flex items-center gap-1.5">
                     <span
-                      className={`inline-block w-2 h-2 rounded-full ${
+                      className={`inline-block h-2 w-2 rounded-full ${
                         bot.isActive ? "bg-green-500" : bot.isError ? "bg-red-500" : "bg-muted-foreground/50"
                       }`}
                     />
@@ -566,105 +1014,95 @@ export default function VirtualOffice() {
                     </span>
                   </div>
                   <div className="text-muted-foreground/70">{bot.model}</div>
-                  <div className="text-muted-foreground/40 mt-1 text-[10px]">Click to open</div>
+                  <div className="mt-1 text-[10px] text-muted-foreground/40">Click to open</div>
                 </div>
               )}
 
-              {/* Speech bubble for active bots */}
               {bot.isActive && (
-                <div className="absolute -top-5 left-full -ml-1 bg-background rounded-lg px-2 py-0.5 text-xs shadow border border-border/60 pointer-events-none flex gap-0.5">
-                  <span className="inline-block w-1 h-1 rounded-full bg-primary" style={{ animation: "typingDot 1.2s ease-in-out infinite" }} />
-                  <span className="inline-block w-1 h-1 rounded-full bg-primary" style={{ animation: "typingDot 1.2s ease-in-out 0.2s infinite" }} />
-                  <span className="inline-block w-1 h-1 rounded-full bg-primary" style={{ animation: "typingDot 1.2s ease-in-out 0.4s infinite" }} />
+                <div className="absolute -top-5 left-full -ml-1 flex gap-0.5 rounded-lg border border-border/60 bg-background px-2 py-0.5 text-xs shadow">
+                  <span className="inline-block h-1 w-1 rounded-full bg-primary" style={{ animation: "officeTypingDot 1.2s ease-in-out infinite" }} />
+                  <span className="inline-block h-1 w-1 rounded-full bg-primary" style={{ animation: "officeTypingDot 1.2s ease-in-out 0.2s infinite" }} />
+                  <span className="inline-block h-1 w-1 rounded-full bg-primary" style={{ animation: "officeTypingDot 1.2s ease-in-out 0.4s infinite" }} />
                 </div>
               )}
 
-              {/* Thought bubble for idle bots */}
               {!bot.isActive && !bot.isError && thoughtEmoji && (
-                <div className="absolute -top-7 left-full -ml-2 pointer-events-none flex items-end gap-0.5">
-                  <div className="w-1 h-1 rounded-full bg-muted-foreground/30" />
-                  <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground/20 -mb-0.5" />
-                  <div className="bg-background/90 rounded-full px-1.5 py-0.5 text-xs shadow border border-border/40">
+                <div className="absolute -top-7 left-full -ml-2 flex items-end gap-0.5">
+                  <div className="h-1 w-1 rounded-full bg-muted-foreground/30" />
+                  <div className="-mb-0.5 h-1.5 w-1.5 rounded-full bg-muted-foreground/20" />
+                  <div className="rounded-full border border-border/40 bg-background/90 px-1.5 py-0.5 text-xs shadow">
                     {thoughtEmoji}
                   </div>
                 </div>
               )}
 
-              {/* Bot Avatar */}
               <div
-                className={`relative flex flex-col items-center transition-transform duration-200 ${
-                  isHovered ? "scale-110" : ""
-                }`}
+                className={`relative flex flex-col items-center transition-transform duration-200 ${isHovered ? "scale-110" : ""}`}
                 style={{ transform: facingLeft ? "scaleX(-1)" : undefined }}
               >
-                {/* Head */}
                 <div
-                  className={`relative w-7 h-7 rounded-full flex items-center justify-center shadow-sm ${
+                  className={`relative flex h-7 w-7 items-center justify-center rounded-full shadow-sm ${
                     bot.isActive
-                      ? `${bot.color.bg}/20 ring-2 ${bot.color.ring} border ${bot.color.border}`
+                      ? `${color.bg}/20 ring-2 ${color.ring} border ${color.border}`
                       : bot.isError
-                        ? "bg-red-500/20 ring-2 ring-red-400/60 border border-red-400"
-                        : `${bot.color.bg}/15 border ${bot.color.border}/50 opacity-80`
+                        ? "border border-red-400 bg-red-500/20 ring-2 ring-red-400/60"
+                        : `${color.bg}/15 border ${color.border}/50 opacity-80`
                   }`}
                 >
                   <BotIcon
-                    className={`size-4 ${
-                      bot.isActive ? bot.color.text : bot.isError ? "text-destructive" : bot.color.text
-                    }`}
-                    style={bot.isActive ? { animation: "typing 1s ease-in-out infinite" } : undefined}
+                    className={`size-4 ${bot.isActive ? color.text : bot.isError ? "text-destructive" : color.text}`}
+                    style={bot.isActive ? { animation: "officeTyping 1s ease-in-out infinite" } : undefined}
                   />
                   {bot.isActive && (
-                    <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-75" />
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+                    <span className="absolute -right-0.5 -top-0.5 flex h-2 w-2">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-500 opacity-75" />
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500" />
                     </span>
                   )}
                 </div>
-                {/* Body */}
                 <div
-                  className={`w-5 h-3 rounded-b-lg -mt-1 ${
+                  className={`-mt-1 h-3 w-5 rounded-b-lg ${
                     bot.isActive
-                      ? `${bot.color.bg}/25 border-x border-b ${bot.color.border}/50`
+                      ? `${color.bg}/25 border-x border-b ${color.border}/50`
                       : bot.isError
-                        ? "bg-red-500/15 border-x border-b border-red-400/30"
-                        : `${bot.color.bg}/10 border-x border-b ${bot.color.border}/30 opacity-80`
+                        ? "border-x border-b border-red-400/30 bg-red-500/15"
+                        : `${color.bg}/10 border-x border-b ${color.border}/30 opacity-80`
                   }`}
                 />
               </div>
 
-              {/* Nameplate */}
               <div
-                className={`mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-mono whitespace-nowrap border shadow-sm transition-opacity ${
+                className={`mt-0.5 rounded border px-1.5 py-0.5 font-mono text-[9px] whitespace-nowrap shadow-sm transition-opacity ${
                   bot.isActive
-                    ? "border-primary/50 text-primary opacity-100 font-bold bg-background/90"
-                    : "border-border/50 text-muted-foreground bg-background/90 opacity-0 group-hover:opacity-100"
+                    ? "border-primary/50 bg-background/90 font-bold text-primary opacity-100"
+                    : "border-border/50 bg-background/90 text-muted-foreground opacity-0 group-hover:opacity-100"
                 }`}
                 style={facingLeft ? { transform: "scaleX(-1)" } : undefined}
               >
-                {bot.title.slice(0, 15)}{bot.title.length > 15 ? "..." : ""}
+                {bot.title.slice(0, 15)}
+                {bot.title.length > 15 ? "..." : ""}
               </div>
             </div>
           );
         })}
-
-        {/* Keyframe animations */}
-        <style>{`
-          @keyframes typing {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-1.5px); }
-          }
-          @keyframes typingDot {
-            0%, 100% { opacity: 0.3; transform: scale(0.8); }
-            50% { opacity: 1; transform: scale(1.2); }
-          }
-          @keyframes drip {
-            0%, 100% { opacity: 0; transform: translateX(-50%) translateY(0); }
-            30% { opacity: 0.8; }
-            70% { opacity: 0.6; transform: translateX(-50%) translateY(4px); }
-            90% { opacity: 0; transform: translateX(-50%) translateY(8px); }
-          }
-        `}</style>
       </div>
+
+      <style>{`
+        @keyframes officeTyping {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-1.5px); }
+        }
+        @keyframes officeTypingDot {
+          0%, 100% { opacity: 0.3; transform: scale(0.8); }
+          50% { opacity: 1; transform: scale(1.2); }
+        }
+        @keyframes officeDrip {
+          0%, 100% { opacity: 0; transform: translateX(-50%) translateY(0); }
+          30% { opacity: 0.8; }
+          70% { opacity: 0.6; transform: translateX(-50%) translateY(4px); }
+          90% { opacity: 0; transform: translateX(-50%) translateY(8px); }
+        }
+      `}</style>
     </div>
   );
 }
