@@ -4,13 +4,25 @@ import {
   CoffeeIcon,
   FolderIcon,
   MonitorIcon,
+  MoreHorizontalIcon,
+  PlusIcon,
   RotateCcwIcon,
   ScanSearchIcon,
 } from "lucide-react";
-import type { ThreadId } from "@t3tools/contracts";
+import type { ProjectId, ThreadId } from "@t3tools/contracts";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "./ui/button";
+import OfficeAgentCreateDialog from "./OfficeAgentCreateDialog";
+import OfficeThreadWindow from "./OfficeThreadWindow";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
+import { useAppSettings } from "../appSettings";
+import { useComposerDraftStore } from "../composerDraftStore";
+import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
+import { createOrReuseProjectDraftThread, deleteThreadWithCleanup } from "../lib/threadLifecycle";
+import { mergeThreadsWithDrafts } from "../lib/threadDrafts";
 import { useStore } from "../store";
+import { useTerminalStateStore } from "../terminalStateStore";
 import {
   COFFEE_BAR_SNACK_IDS,
   DESK_HEIGHT,
@@ -69,7 +81,7 @@ interface BotState {
 }
 
 interface VirtualOfficeProps {
-  onThreadActivate?: (threadId: ThreadId) => void;
+  onOpenThreadInMainWindow?: (threadId: ThreadId) => void;
 }
 
 type PanState = {
@@ -298,9 +310,20 @@ function FurnitureNode(props: {
   );
 }
 
-export default function VirtualOffice({ onThreadActivate }: VirtualOfficeProps) {
+export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOfficeProps) {
   const threads = useStore((store) => store.threads);
   const projects = useStore((store) => store.projects);
+  const { settings } = useAppSettings();
+  const getDraftThread = useComposerDraftStore((store) => store.getDraftThread);
+  const getDraftThreadByProjectId = useComposerDraftStore((store) => store.getDraftThreadByProjectId);
+  const draftThreadsByThreadId = useComposerDraftStore((store) => store.draftThreadsByThreadId);
+  const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
+  const setProjectDraftThreadId = useComposerDraftStore((store) => store.setProjectDraftThreadId);
+  const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearThreadDraft);
+  const clearProjectDraftThreadById = useComposerDraftStore((store) => store.clearProjectDraftThreadById);
+  const clearTerminalState = useTerminalStateStore((store) => store.clearTerminalState);
+  const queryClient = useQueryClient();
+  const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const viewportRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<OfficePersistedState | null>(null);
   const persistTimerRef = useRef<number | null>(null);
@@ -315,11 +338,23 @@ export default function VirtualOffice({ onThreadActivate }: VirtualOfficeProps) 
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [hoveredBotId, setHoveredBotId] = useState<string | null>(null);
   const [isInteracting, setIsInteracting] = useState(false);
+  const [selectedThreadId, setSelectedThreadId] = useState<ThreadId | null>(null);
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [createDialogProjectId, setCreateDialogProjectId] = useState<ProjectId | null>(null);
   const shouldFitCameraRef = useRef(initialPersistedState === null);
 
   stateRef.current = officeState;
 
-  const officeInputs = useMemo(() => deriveOfficeInputs(projects, threads), [projects, threads]);
+  const mergedThreads = useMemo(
+    () =>
+      mergeThreadsWithDrafts({
+        threads,
+        draftThreadsByThreadId,
+        projects,
+      }),
+    [draftThreadsByThreadId, projects, threads],
+  );
+  const officeInputs = useMemo(() => deriveOfficeInputs(projects, mergedThreads), [mergedThreads, projects]);
   const { scene, persistedState: normalizedPersistedState } = useMemo(
     () =>
       buildOfficeScene({
@@ -329,6 +364,15 @@ export default function VirtualOffice({ onThreadActivate }: VirtualOfficeProps) 
       }),
     [officeInputs, officeState],
   );
+
+  useEffect(() => {
+    if (!selectedThreadId) {
+      return;
+    }
+    if (!mergedThreads.some((thread) => thread.id === selectedThreadId)) {
+      setSelectedThreadId(null);
+    }
+  }, [mergedThreads, selectedThreadId]);
 
   useEffect(() => {
     if (areOfficePersistedStatesEqual(officeState, normalizedPersistedState)) {
@@ -587,13 +631,65 @@ export default function VirtualOffice({ onThreadActivate }: VirtualOfficeProps) 
       if (shouldSuppressClick()) {
         return;
       }
-      if (onThreadActivate) {
-        onThreadActivate(threadId);
-        return;
-      }
-      window.location.hash = `#/${threadId}`;
+      setSelectedThreadId(threadId);
     },
-    [onThreadActivate, shouldSuppressClick],
+    [shouldSuppressClick],
+  );
+
+  const openCreateDialog = useCallback((projectId: ProjectId | null = null) => {
+    setCreateDialogProjectId(projectId ?? projects[0]?.id ?? null);
+    setIsCreateDialogOpen(true);
+  }, [projects]);
+
+  const handleCreateAgent = useCallback(
+    async (input: { projectId: ProjectId; title: string | null }) => {
+      const result = await createOrReuseProjectDraftThread(
+        {
+          getDraftThreadByProjectId,
+          getDraftThread,
+          setDraftThreadContext,
+          setProjectDraftThreadId,
+        },
+        {
+          projectId: input.projectId,
+          title: input.title,
+        },
+      );
+      setSelectedThreadId(result.threadId);
+    },
+    [getDraftThread, getDraftThreadByProjectId, setDraftThreadContext, setProjectDraftThreadId],
+  );
+
+  const handleDeleteThread = useCallback(
+    async (threadId: ThreadId) => {
+      const result = await deleteThreadWithCleanup(
+        {
+          threads,
+          projects,
+          confirmThreadDelete: settings.confirmThreadDelete,
+          getDraftThread,
+          clearComposerDraftForThread,
+          clearProjectDraftThreadById,
+          clearTerminalState,
+          removeWorktree: (input) => removeWorktreeMutation.mutateAsync(input),
+        },
+        threadId,
+      );
+      if (result.deletedDraftOnly || selectedThreadId === threadId) {
+        setSelectedThreadId((current) => (current === threadId ? null : current));
+      }
+    },
+    [
+      clearComposerDraftForThread,
+      clearProjectDraftThreadById,
+      clearTerminalState,
+      getDraftThread,
+      projects,
+      removeWorktreeMutation,
+      selectedThreadId,
+      settings.confirmThreadDelete,
+      threads,
+    ],
   );
 
   const beginDrag = useCallback(
@@ -832,20 +928,37 @@ export default function VirtualOffice({ onThreadActivate }: VirtualOfficeProps) 
     >
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-linear-to-t from-background via-background/70 to-transparent" />
 
-      <div className="pointer-events-none absolute left-4 top-4 z-20 flex gap-2">
-        <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-border/60 bg-background/90 px-2 py-1 text-[11px] font-medium shadow-lg backdrop-blur-sm">
-          <span className="text-muted-foreground">Zoom</span>
-          <span>{Math.round(camera.zoom * 100)}%</span>
-        </div>
-        <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-border/60 bg-background/90 p-1 shadow-lg backdrop-blur-sm">
-          <Button size="sm" variant="ghost" onClick={fitCameraToScene}>
-            <ScanSearchIcon className="size-4" />
-            Fit to content
+      <div className="pointer-events-none absolute left-4 top-4 z-20 flex max-w-[calc(100%-2rem)] items-center gap-2">
+        <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-border/60 bg-background/90 px-2 py-1.5 shadow-lg backdrop-blur-sm">
+          <div className="rounded-full border border-border/60 bg-card/80 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground/80">
+            Office
+          </div>
+          <Button size="sm" variant="ghost" onClick={() => openCreateDialog()}>
+            <PlusIcon className="size-4" />
+            Create Agent
           </Button>
-          <Button size="sm" variant="ghost" onClick={resetLayout}>
-            <RotateCcwIcon className="size-4" />
-            Reset layout
-          </Button>
+          <div className="rounded-full border border-border/60 bg-background/70 px-2 py-1 text-[11px] font-medium">
+            <span className="text-muted-foreground">Zoom</span>{" "}
+            <span>{Math.round(camera.zoom * 100)}%</span>
+          </div>
+          <Menu>
+            <MenuTrigger
+              render={<Button aria-label="Office actions" size="icon-sm" variant="ghost" />}
+            >
+              <MoreHorizontalIcon className="size-4" />
+            </MenuTrigger>
+            <MenuPopup align="end">
+              <MenuItem onClick={() => openCreateDialog()}>Create Agent</MenuItem>
+              <MenuItem onClick={fitCameraToScene}>
+                <ScanSearchIcon className="size-4" />
+                Fit to content
+              </MenuItem>
+              <MenuItem onClick={resetLayout}>
+                <RotateCcwIcon className="size-4" />
+                Reset layout
+              </MenuItem>
+            </MenuPopup>
+          </Menu>
         </div>
       </div>
 
@@ -860,12 +973,15 @@ export default function VirtualOffice({ onThreadActivate }: VirtualOfficeProps) 
           <div
             key={group.key}
             data-office-group={group.key}
-            className="absolute rounded-2xl border border-border/35 bg-background/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+            className="absolute rounded-2xl border bg-background/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
             style={{
               left: group.element.x,
               top: group.element.y,
               width: group.element.width,
               height: group.element.height,
+              borderColor: `${group.accentColor}90`,
+              boxShadow: `0 0 0 1px ${group.accentColor}24, inset 0 0 0 1px ${group.accentColor}20`,
+              background: `linear-gradient(180deg, ${group.accentColor}12, rgba(255,255,255,0.02))`,
             }}
             onPointerDown={(event) =>
               beginDrag(event, {
@@ -881,11 +997,47 @@ export default function VirtualOffice({ onThreadActivate }: VirtualOfficeProps) 
             onPointerUp={handleDragPointerEnd}
             onPointerCancel={handleDragPointerEnd}
           >
-            <div className="absolute left-1/2 top-0 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-full border border-border/50 bg-background/95 px-3 py-1 text-[10px] font-semibold tracking-[0.12em] text-foreground/75 uppercase shadow-sm">
+            <div
+              className="absolute left-1/2 top-0 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-full border bg-background/95 px-3 py-1 text-[10px] font-semibold tracking-[0.12em] text-foreground/75 uppercase shadow-sm"
+              style={{
+                borderColor: `${group.accentColor}88`,
+                boxShadow: `0 10px 30px -20px ${group.accentColor}`,
+              }}
+            >
               <ProjectOfficeIcon cwd={group.cwd} />
               <span>{group.label}</span>
+              <button
+                type="button"
+                className="ml-1 inline-flex h-5 items-center gap-1 rounded-full border px-1.5 text-[10px] font-medium normal-case"
+                style={{
+                  borderColor: `${group.accentColor}88`,
+                  color: group.accentColor,
+                  backgroundColor: `${group.accentColor}14`,
+                }}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  openCreateDialog(
+                    group.deskThreadIds[0]
+                      ? (mergedThreads.find((thread) => thread.id === group.deskThreadIds[0])?.projectId ?? null)
+                      : null,
+                  );
+                }}
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                }}
+                aria-label={`Create agent in ${group.label}`}
+              >
+                <PlusIcon className="size-3" />
+                Create
+              </button>
             </div>
-            <div className="absolute inset-x-6 bottom-4 h-px bg-linear-to-r from-transparent via-border/40 to-transparent" />
+            <div
+              className="absolute inset-x-6 bottom-4 h-px bg-linear-to-r from-transparent to-transparent"
+              style={{
+                backgroundImage: `linear-gradient(90deg, transparent, ${group.accentColor}80, transparent)`,
+              }}
+            />
           </div>
         ))}
 
@@ -957,8 +1109,14 @@ export default function VirtualOffice({ onThreadActivate }: VirtualOfficeProps) 
               {desk.title.length > 18 ? "..." : ""}
             </div>
             <div className="flex flex-col items-center">
-              <div className="flex h-7 w-10 items-center justify-center rounded-sm border border-slate-600/50 bg-slate-700/60">
-                <MonitorIcon className="size-4 text-blue-400/70" />
+              <div
+                className="flex h-7 w-10 items-center justify-center rounded-sm border bg-slate-700/60"
+                style={{
+                  borderColor: `${desk.accentColor}88`,
+                  boxShadow: `0 0 0 1px ${desk.accentColor}20`,
+                }}
+              >
+                <MonitorIcon className="size-4" style={{ color: desk.accentColor }} />
               </div>
               <div className="h-1.5 w-1 bg-slate-600/50" />
               <div className="h-0.5 w-4 rounded bg-slate-600/50" />
@@ -1086,6 +1244,21 @@ export default function VirtualOffice({ onThreadActivate }: VirtualOfficeProps) 
           );
         })}
       </div>
+      <OfficeAgentCreateDialog
+        open={isCreateDialogOpen}
+        initialProjectId={createDialogProjectId}
+        projects={projects}
+        onOpenChange={setIsCreateDialogOpen}
+        onCreate={handleCreateAgent}
+      />
+      <OfficeThreadWindow
+        openThreadId={selectedThreadId}
+        projects={projects}
+        threads={mergedThreads}
+        onClose={() => setSelectedThreadId(null)}
+        onDelete={handleDeleteThread}
+        {...(onOpenThreadInMainWindow ? { onOpenInMainWindow: onOpenThreadInMainWindow } : {})}
+      />
 
       <style>{`
         @keyframes officeTyping {

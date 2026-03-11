@@ -1,12 +1,26 @@
 import "../index.css";
 
 import { ProjectId, ThreadId } from "@t3tools/contracts";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import { useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Project, type Thread } from "../types";
 import VirtualOffice from "./VirtualOffice";
+
+vi.mock("~/components/ChatView", async () => {
+  const { SidebarTrigger } = await import("~/components/ui/sidebar");
+  return {
+    default: (props: { threadId: string }) => (
+      <div data-chat-view={props.threadId}>
+        <SidebarTrigger aria-label={`Mock sidebar trigger ${props.threadId}`} />
+        Mock chat
+      </div>
+    ),
+  };
+});
 
 function makeProject(id: string, name: string): Project {
   return {
@@ -57,6 +71,11 @@ function seedOfficeStore() {
     threadsHydrated: true,
     sourceControlOpen: false,
   });
+  useComposerDraftStore.setState({
+    draftsByThreadId: {},
+    draftThreadsByThreadId: {},
+    projectDraftThreadIdByProjectId: {},
+  });
 }
 
 function waitForOfficeLayout() {
@@ -86,9 +105,11 @@ async function mountOffice() {
   document.body.append(host);
 
   const screen = await render(
-    <div className="h-full w-full">
-      <VirtualOffice onThreadActivate={(threadId) => activations.push(threadId)} />
-    </div>,
+    <QueryClientProvider client={new QueryClient()}>
+      <div className="h-full w-full">
+        <VirtualOffice onOpenThreadInMainWindow={(threadId) => activations.push(threadId)} />
+      </div>
+    </QueryClientProvider>,
     {
       container: host,
     },
@@ -182,6 +203,42 @@ function readCameraAttr(attribute: "data-camera-x" | "data-camera-y" | "data-cam
   return Number(viewport.getAttribute(attribute) ?? "0");
 }
 
+function getButtonByText(text: string): HTMLButtonElement {
+  const button = getButtonsByText(text)[0];
+  if (!button) {
+    throw new Error(`Missing button: ${text}`);
+  }
+  return button;
+}
+
+function getButtonsByText(text: string): HTMLButtonElement[] {
+  return [...document.querySelectorAll<HTMLButtonElement>("button")].filter(
+    (entry) => entry.textContent?.trim() === text,
+  );
+}
+
+function getButtonByAriaLabel(label: string): HTMLButtonElement {
+  const button = document.querySelector<HTMLButtonElement>(`button[aria-label='${label}']`);
+  if (!button) {
+    throw new Error(`Missing button aria-label: ${label}`);
+  }
+  return button;
+}
+
+function getDialogButtonByText(text: string): HTMLButtonElement {
+  const dialog = document.querySelector<HTMLElement>("[data-slot='dialog-popup']");
+  if (!dialog) {
+    throw new Error("Missing dialog popup");
+  }
+  const button = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find(
+    (entry) => entry.textContent?.trim() === text,
+  );
+  if (!button) {
+    throw new Error(`Missing dialog button: ${text}`);
+  }
+  return button;
+}
+
 describe("VirtualOffice interactions", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -245,15 +302,20 @@ describe("VirtualOffice interactions", () => {
     }
   });
 
-  it("opens a desk on click but suppresses click after dragging the desk", async () => {
+  it("opens a desk popup on click, supports opening in the main window, and suppresses click after dragging the desk", async () => {
     const mounted = await mountOffice();
     try {
       getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").click();
       await waitForOfficeLayout();
+      expect(getRequiredElement("[data-office-thread-window='thread-a']")).toBeTruthy();
+
+      getButtonByText("Open in main window").click();
       expect(mounted.activations).toEqual(["thread-a"]);
 
       mounted.activations.length = 0;
+      getButtonByAriaLabel("Close office thread window").click();
       await dragSelector("[data-office-desk='thread-a']", { x: 70, y: 20 });
+      expect(document.querySelector("[data-office-thread-window='thread-a']")).toBeNull();
       expect(mounted.activations).toEqual([]);
     } finally {
       await mounted.cleanup();
@@ -283,6 +345,65 @@ describe("VirtualOffice interactions", () => {
 
       expect(deskAAfterSingleDrag.x).toBeGreaterThan(deskAAfterGroup.x + 30);
       expect(Math.abs(deskBAfterSingleDrag.x - deskBBeforeSingleDrag.x)).toBeLessThan(8);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("creates a draft agent from the office toolbar", async () => {
+    const mounted = await mountOffice();
+    try {
+      getButtonByText("Create Agent").click();
+      await waitForOfficeLayout();
+
+      const titleInput = document.querySelector<HTMLInputElement>("input");
+      if (!titleInput) {
+        throw new Error("Missing draft title input");
+      }
+      titleInput.value = "Office draft";
+      titleInput.dispatchEvent(new Event("input", { bubbles: true }));
+      titleInput.dispatchEvent(new Event("change", { bubbles: true }));
+      getDialogButtonByText("Create Agent").click();
+      await waitForOfficeLayout();
+
+      const draftThread = useComposerDraftStore
+        .getState()
+        .getDraftThreadByProjectId(ProjectId.makeUnsafe("project-1"));
+      expect(draftThread?.threadId).toBeTruthy();
+      expect(
+        document.querySelector(`[data-office-desk='${draftThread?.threadId ?? ""}']`),
+      ).toBeTruthy();
+      expect(
+        document.querySelector(`[data-office-thread-window='${draftThread?.threadId ?? ""}']`),
+      ).toBeTruthy();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("deletes a draft agent from the popup without leaving the office", async () => {
+    const mounted = await mountOffice();
+    try {
+      getButtonByText("Create Agent").click();
+      await waitForOfficeLayout();
+      getDialogButtonByText("Create Agent").click();
+      await waitForOfficeLayout();
+
+      const draftThread = useComposerDraftStore
+        .getState()
+        .getDraftThreadByProjectId(ProjectId.makeUnsafe("project-1"));
+      if (!draftThread) {
+        throw new Error("Missing created draft thread");
+      }
+
+      getButtonByText("Delete Agent").click();
+      await waitForOfficeLayout();
+
+      expect(
+        useComposerDraftStore.getState().getDraftThreadByProjectId(ProjectId.makeUnsafe("project-1")),
+      ).toBeNull();
+      expect(document.querySelector(`[data-office-thread-window='${draftThread.threadId}']`)).toBeNull();
+      expect(document.querySelector(`[data-office-desk='${draftThread.threadId}']`)).toBeNull();
     } finally {
       await mounted.cleanup();
     }

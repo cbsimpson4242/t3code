@@ -92,6 +92,13 @@ export interface DesktopBridge {
   getWsUrl: () => string | null;
   pickFolder: () => Promise<string | null>;
   confirm: (message: string) => Promise<boolean>;
+  openOfficeWindow: () => Promise<void>;
+  focusOfficeWindow: () => Promise<void>;
+  closeOfficeWindow: () => Promise<void>;
+  getOfficeWindowOpen: () => Promise<boolean>;
+  onOfficeWindowOpenChange: (listener: (open: boolean) => void) => () => void;
+  openThreadInMainWindow: (threadId: string) => Promise<void>;
+  onOpenThreadInMainWindow: (listener: (threadId: string) => void) => () => void;
   showContextMenu: <T extends string>(
     items: readonly ContextMenuItem<T>[],
     position?: { x: number; y: number },

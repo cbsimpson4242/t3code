@@ -145,6 +145,21 @@ function EventRouter() {
   pathnameRef.current = pathname;
 
   useEffect(() => {
+    const onOpenThreadInMainWindow = window.desktopBridge?.onOpenThreadInMainWindow;
+    if (typeof onOpenThreadInMainWindow !== "function") {
+      return;
+    }
+
+    const unsubscribe = onOpenThreadInMainWindow((threadId) => {
+      void navigate({ to: "/$threadId", params: { threadId } });
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [navigate]);
+
+  useEffect(() => {
     const api = readNativeApi();
     if (!api) return;
     let disposed = false;

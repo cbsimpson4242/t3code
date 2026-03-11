@@ -39,7 +39,14 @@ const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
 const CONFIRM_CHANNEL = "desktop:confirm";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
+const OFFICE_OPEN_CHANNEL = "desktop:office-open";
+const OFFICE_FOCUS_CHANNEL = "desktop:office-focus";
+const OFFICE_CLOSE_CHANNEL = "desktop:office-close";
+const OFFICE_GET_OPEN_CHANNEL = "desktop:office-get-open";
+const OFFICE_OPEN_CHANGE_CHANNEL = "desktop:office-open-change";
 const MENU_ACTION_CHANNEL = "desktop:menu-action";
+const OPEN_THREAD_IN_MAIN_WINDOW_CHANNEL = "desktop:open-thread-in-main-window";
+const OPEN_THREAD_IN_MAIN_WINDOW_EVENT_CHANNEL = "desktop:open-thread-in-main-window-event";
 const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
@@ -65,8 +72,10 @@ const DESKTOP_UPDATE_CHANNEL = "latest";
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
+type AppWindowKind = "main" | "office";
 
 let mainWindow: BrowserWindow | null = null;
+let officeWindow: BrowserWindow | null = null;
 let backendProcess: ChildProcess.ChildProcess | null = null;
 let backendPort = 0;
 let backendAuthToken = "";
@@ -467,21 +476,124 @@ function registerDesktopProtocol(): void {
   desktopProtocolRegistered = true;
 }
 
-function dispatchMenuAction(action: string): void {
-  const existingWindow =
-    BrowserWindow.getFocusedWindow() ?? mainWindow ?? BrowserWindow.getAllWindows()[0];
-  const targetWindow = existingWindow ?? createWindow();
-  if (!existingWindow) {
-    mainWindow = targetWindow;
+function isWindowOpen(window: BrowserWindow | null): window is BrowserWindow {
+  return window !== null && !window.isDestroyed();
+}
+
+function isOfficeWindowOpen(): boolean {
+  return isWindowOpen(officeWindow);
+}
+
+function emitOfficeWindowOpenChange(): void {
+  const open = isOfficeWindowOpen();
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    window.webContents.send(OFFICE_OPEN_CHANGE_CHANNEL, open);
   }
+}
+
+function rendererRouteUrl(routePath?: string): string {
+  if (isDevelopment) {
+    const url = new URL(process.env.VITE_DEV_SERVER_URL as string);
+    if (routePath) {
+      url.hash = routePath;
+    }
+    return url.toString();
+  }
+
+  return routePath
+    ? `${DESKTOP_SCHEME}://app/index.html#${routePath}`
+    : `${DESKTOP_SCHEME}://app/index.html`;
+}
+
+function isOfficeRouteUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    if (isDevelopment) {
+      const devUrl = new URL(process.env.VITE_DEV_SERVER_URL as string);
+      return parsed.origin === devUrl.origin && parsed.hash === "#/office";
+    }
+
+    return parsed.protocol === `${DESKTOP_SCHEME}:` && parsed.hash === "#/office";
+  } catch {
+    return false;
+  }
+}
+
+function windowTitleForKind(kind: AppWindowKind): string {
+  return kind === "office" ? `${APP_DISPLAY_NAME} Office` : APP_DISPLAY_NAME;
+}
+
+function windowRouteForKind(kind: AppWindowKind): string | undefined {
+  return kind === "office" ? "/office" : undefined;
+}
+
+function getOrCreateMainWindow(): BrowserWindow {
+  if (isWindowOpen(mainWindow)) {
+    return mainWindow;
+  }
+
+  mainWindow = createWindow("main");
+  return mainWindow;
+}
+
+function getOrCreateOfficeWindow(): BrowserWindow {
+  if (isWindowOpen(officeWindow)) {
+    return officeWindow;
+  }
+
+  officeWindow = createWindow("office");
+  emitOfficeWindowOpenChange();
+  return officeWindow;
+}
+
+function focusWindow(window: BrowserWindow): void {
+  if (window.isMinimized()) {
+    window.restore();
+  }
+  if (!window.isVisible()) {
+    window.show();
+  }
+  window.focus();
+}
+
+function focusOfficeWindow(): void {
+  focusWindow(getOrCreateOfficeWindow());
+}
+
+function closeOfficeWindow(): void {
+  if (isWindowOpen(officeWindow)) {
+    const window = officeWindow;
+    officeWindow = null;
+    window.close();
+  }
+  emitOfficeWindowOpenChange();
+  focusWindow(getOrCreateMainWindow());
+}
+
+function sendThreadOpenToMainWindow(threadId: string): void {
+  const targetWindow = getOrCreateMainWindow();
+  const send = () => {
+    if (targetWindow.isDestroyed()) return;
+    targetWindow.webContents.send(OPEN_THREAD_IN_MAIN_WINDOW_EVENT_CHANNEL, threadId);
+    focusWindow(targetWindow);
+  };
+
+  if (targetWindow.webContents.isLoadingMainFrame()) {
+    targetWindow.webContents.once("did-finish-load", send);
+    return;
+  }
+
+  send();
+}
+
+function dispatchMenuAction(action: string): void {
+  const targetWindow = getOrCreateMainWindow();
 
   const send = () => {
     if (targetWindow.isDestroyed()) return;
     targetWindow.webContents.send(MENU_ACTION_CHANNEL, action);
-    if (!targetWindow.isVisible()) {
-      targetWindow.show();
-    }
-    targetWindow.focus();
+    focusWindow(targetWindow);
   };
 
   if (targetWindow.webContents.isLoadingMainFrame()) {
@@ -513,7 +625,7 @@ function handleCheckForUpdatesMenuClick(): void {
   }
 
   if (!BrowserWindow.getAllWindows().length) {
-    mainWindow = createWindow();
+    mainWindow = getOrCreateMainWindow();
   }
   void checkForUpdates("menu");
 }
@@ -535,6 +647,10 @@ function configureApplicationMenu(): void {
           label: "Settings...",
           accelerator: "CmdOrCtrl+,",
           click: () => dispatchMenuAction("open-settings"),
+        },
+        {
+          label: "Open Office Window",
+          click: () => focusOfficeWindow(),
         },
         { type: "separator" },
         { role: "services" },
@@ -559,6 +675,10 @@ function configureApplicationMenu(): void {
                 label: "Settings...",
                 accelerator: "CmdOrCtrl+,",
                 click: () => dispatchMenuAction("open-settings"),
+              },
+              {
+                label: "Open Office Window",
+                click: () => focusOfficeWindow(),
               },
               { type: "separator" as const },
             ]),
@@ -1034,6 +1154,28 @@ function registerIpcHandlers(): void {
     return showDesktopConfirmDialog(message, owner);
   });
 
+  ipcMain.removeHandler(OFFICE_OPEN_CHANNEL);
+  ipcMain.handle(OFFICE_OPEN_CHANNEL, async () => {
+    focusOfficeWindow();
+  });
+
+  ipcMain.removeHandler(OFFICE_FOCUS_CHANNEL);
+  ipcMain.handle(OFFICE_FOCUS_CHANNEL, async () => {
+    if (isOfficeWindowOpen()) {
+      focusOfficeWindow();
+      return;
+    }
+    focusWindow(getOrCreateMainWindow());
+  });
+
+  ipcMain.removeHandler(OFFICE_CLOSE_CHANNEL);
+  ipcMain.handle(OFFICE_CLOSE_CHANNEL, async () => {
+    closeOfficeWindow();
+  });
+
+  ipcMain.removeHandler(OFFICE_GET_OPEN_CHANNEL);
+  ipcMain.handle(OFFICE_GET_OPEN_CHANNEL, async () => isOfficeWindowOpen());
+
   ipcMain.removeHandler(CONTEXT_MENU_CHANNEL);
   ipcMain.handle(
     CONTEXT_MENU_CHANNEL,
@@ -1110,6 +1252,15 @@ function registerIpcHandlers(): void {
     }
   });
 
+  ipcMain.removeHandler(OPEN_THREAD_IN_MAIN_WINDOW_CHANNEL);
+  ipcMain.handle(OPEN_THREAD_IN_MAIN_WINDOW_CHANNEL, async (_event, rawThreadId: unknown) => {
+    if (typeof rawThreadId !== "string" || rawThreadId.trim().length === 0) {
+      return;
+    }
+
+    sendThreadOpenToMainWindow(rawThreadId);
+  });
+
   ipcMain.removeHandler(UPDATE_GET_STATE_CHANNEL);
   ipcMain.handle(UPDATE_GET_STATE_CHANNEL, async () => updateState);
 
@@ -1148,16 +1299,16 @@ function getIconOption(): { icon: string } | Record<string, never> {
   return iconPath ? { icon: iconPath } : {};
 }
 
-function createWindow(): BrowserWindow {
+function createWindow(kind: AppWindowKind): BrowserWindow {
   const window = new BrowserWindow({
-    width: 1100,
-    height: 780,
-    minWidth: 840,
-    minHeight: 620,
+    width: kind === "office" ? 1360 : 1100,
+    height: kind === "office" ? 860 : 780,
+    minWidth: kind === "office" ? 960 : 840,
+    minHeight: kind === "office" ? 640 : 620,
     show: false,
     autoHideMenuBar: true,
     ...getIconOption(),
-    title: APP_DISPLAY_NAME,
+    title: windowTitleForKind(kind),
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 18 },
     webPreferences: {
@@ -1197,6 +1348,11 @@ function createWindow(): BrowserWindow {
   });
 
   window.webContents.setWindowOpenHandler(({ url }) => {
+    if (isOfficeRouteUrl(url)) {
+      focusOfficeWindow();
+      return { action: "deny" };
+    }
+
     const externalUrl = getSafeExternalUrl(url);
     if (externalUrl) {
       void shell.openExternal(externalUrl);
@@ -1206,28 +1362,37 @@ function createWindow(): BrowserWindow {
 
   window.on("page-title-updated", (event) => {
     event.preventDefault();
-    window.setTitle(APP_DISPLAY_NAME);
+    window.setTitle(windowTitleForKind(kind));
   });
   window.webContents.on("did-finish-load", () => {
-    window.setTitle(APP_DISPLAY_NAME);
+    window.setTitle(windowTitleForKind(kind));
     emitUpdateState();
+    emitOfficeWindowOpenChange();
   });
   window.once("ready-to-show", () => {
     window.show();
   });
 
-  if (isDevelopment) {
-    void window.loadURL(process.env.VITE_DEV_SERVER_URL as string);
+  void window.loadURL(rendererRouteUrl(windowRouteForKind(kind)));
+  if (isDevelopment && kind === "main") {
     window.webContents.openDevTools({ mode: "detach" });
-  } else {
-    void window.loadURL(`${DESKTOP_SCHEME}://app/index.html`);
   }
 
   window.on("closed", () => {
     if (mainWindow === window) {
       mainWindow = null;
     }
+    if (officeWindow === window) {
+      officeWindow = null;
+      emitOfficeWindowOpenChange();
+    }
   });
+
+  if (kind === "office") {
+    window.on("focus", () => {
+      emitOfficeWindowOpenChange();
+    });
+  }
 
   return window;
 }
@@ -1256,7 +1421,7 @@ async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap ipc handlers registered");
   startBackend();
   writeDesktopLogHeader("bootstrap backend start requested");
-  mainWindow = createWindow();
+  mainWindow = getOrCreateMainWindow();
   writeDesktopLogHeader("bootstrap main window created");
 }
 
@@ -1282,7 +1447,7 @@ app
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        mainWindow = createWindow();
+        mainWindow = getOrCreateMainWindow();
       }
     });
   })

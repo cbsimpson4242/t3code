@@ -72,6 +72,7 @@ export interface OfficeDeskInput {
   title: string;
   model: string;
   groupKey: string;
+  accentColor: string;
   isActive: boolean;
   isError: boolean;
   hasPendingUserInput: boolean;
@@ -84,6 +85,7 @@ export interface OfficeProjectGroupScene {
   key: string;
   label: string;
   cwd: string | null;
+  accentColor: string;
   anchor: OfficeProjectGroupAnchor;
   element: OfficeElement;
   deskThreadIds: string[];
@@ -94,6 +96,7 @@ export interface OfficeDeskScene {
   title: string;
   model: string;
   groupKey: string;
+  accentColor: string;
   isActive: boolean;
   isError: boolean;
   hasPendingUserInput: boolean;

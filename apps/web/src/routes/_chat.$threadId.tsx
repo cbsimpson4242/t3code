@@ -3,7 +3,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Suspense, lazy, type ReactNode, useCallback, useEffect } from "react";
 
 import ChatView from "../components/ChatView";
-import VirtualOffice from "../components/VirtualOffice";
+import OfficePane from "../components/OfficePane";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -210,7 +210,7 @@ function ChatThreadRouteView() {
             storageKey={OFFICE_CHAT_SPLIT_STORAGE_KEY}
             top={
               <div className="h-full min-h-0 overflow-hidden border-b border-border/70 bg-background">
-                <VirtualOffice />
+                <OfficePane />
               </div>
             }
             bottom={
@@ -234,7 +234,7 @@ function ChatThreadRouteView() {
           storageKey={OFFICE_CHAT_SPLIT_STORAGE_KEY}
           top={
             <div className="h-full min-h-0 overflow-hidden border-b border-border/70 bg-background">
-              <VirtualOffice />
+              <OfficePane />
             </div>
           }
           bottom={

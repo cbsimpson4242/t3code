@@ -209,4 +209,25 @@ describe("officeLayout", () => {
       needsAttention: true,
     });
   });
+
+  it("assigns stable accent colors by group key", () => {
+    const projects = [makeProject("project-1", "project-a"), makeProject("project-2", "project-b")];
+    const threads = [
+      makeThread({ id: "thread-1", projectId: "project-1", title: "Thread 1", worktreePath: "group-a" }),
+      makeThread({ id: "thread-2", projectId: "project-2", title: "Thread 2", worktreePath: "group-b" }),
+    ];
+
+    const firstInputs = deriveOfficeInputs(projects, threads);
+    const secondInputs = deriveOfficeInputs(
+      [...projects, makeProject("project-3", "project-c")],
+      [...threads, makeThread({ id: "thread-3", projectId: "project-3", title: "Thread 3", worktreePath: "group-c" })],
+    );
+
+    const firstGroupA = firstInputs.desks.find((desk) => desk.groupKey === "group-a");
+    const secondGroupA = secondInputs.desks.find((desk) => desk.groupKey === "group-a");
+    const firstGroupB = firstInputs.desks.find((desk) => desk.groupKey === "group-b");
+
+    expect(firstGroupA?.accentColor).toBe(secondGroupA?.accentColor);
+    expect(firstGroupA?.accentColor).not.toBe(firstGroupB?.accentColor);
+  });
 });

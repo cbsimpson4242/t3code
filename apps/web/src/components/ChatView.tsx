@@ -50,6 +50,7 @@ import {
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
+import { buildLocalDraftThread, draftThreadTitle } from "~/lib/threadDrafts";
 
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
@@ -106,13 +107,13 @@ import {
   DEFAULT_THREAD_TERMINAL_ID,
   MAX_THREAD_TERMINAL_COUNT,
   type ChatMessage,
-  type Thread,
   type TurnDiffFileChange,
   type TurnDiffSummary,
 } from "../types";
 import { basenameOfPath, getVscodeIconUrlForEntry } from "../vscode-icons";
 import { useTheme } from "../hooks/useTheme";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
+import { useMessageTextToSpeech } from "../hooks/useMessageTextToSpeech";
 import {
   buildTurnDiffTree,
   summarizeTurnDiffStats,
@@ -147,6 +148,8 @@ import {
   XIcon,
   CopyIcon,
   CheckIcon,
+  SquareIcon,
+  Volume2Icon,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -207,7 +210,6 @@ import { getAppModelOptions, resolveAppModelSelection, useAppSettings } from "..
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
-  type DraftThreadState,
   type PersistedComposerImageAttachment,
   useComposerDraftStore,
   useComposerThreadDraft,
@@ -217,6 +219,7 @@ import { selectThreadTerminalState, useTerminalStateStore } from "../terminalSta
 import { clamp } from "effect/Number";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
+import { canReadMessage } from "../textToSpeech";
 
 function formatMessageMeta(createdAt: string, duration: string | null): string {
   if (!duration) return formatTimestamp(createdAt);
@@ -317,34 +320,6 @@ function buildExpandedImagePreview(
   return {
     images: previewableImages.map((image) => ({ src: image.src, name: image.name })),
     index: selectedIndex,
-  };
-}
-
-function buildLocalDraftThread(
-  threadId: ThreadId,
-  draftThread: DraftThreadState,
-  fallbackModel: string,
-  error: string | null,
-): Thread {
-  return {
-    id: threadId,
-    codexThreadId: null,
-    projectId: draftThread.projectId,
-    title: "New thread",
-    model: fallbackModel,
-    runtimeMode: draftThread.runtimeMode,
-    interactionMode: draftThread.interactionMode,
-    session: null,
-    messages: [],
-    error,
-    createdAt: draftThread.createdAt,
-    latestTurn: null,
-    lastVisitedAt: draftThread.createdAt,
-    branch: draftThread.branch,
-    worktreePath: draftThread.worktreePath,
-    turnDiffSummaries: [],
-    activities: [],
-    proposedPlans: [],
   };
 }
 
@@ -737,6 +712,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [draftThread, fallbackDraftProject?.model, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
+  const {
+    supported: speechSynthesisSupported,
+    activeMessageId: activeSpeechMessageId,
+    speak: speakMessageAloud,
+    stop: stopSpeakingMessage,
+  } = useMessageTextToSpeech();
   const runtimeMode =
     composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
@@ -2591,7 +2572,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
           firstComposerImageName = firstComposerImage.name;
         }
       }
-      let titleSeed = trimmed;
+      let titleSeed = isLocalDraftThread && draftThread ? draftThreadTitle(draftThread) : trimmed;
+      if (!titleSeed || titleSeed === "New thread") {
+        titleSeed = trimmed;
+      }
       if (!titleSeed) {
         if (firstComposerImageName) {
           titleSeed = `Image: ${firstComposerImageName}`;
@@ -3527,6 +3511,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
               onImageExpand={onExpandTimelineImage}
               markdownCwd={gitCwd ?? undefined}
               resolvedTheme={resolvedTheme}
+              speechSynthesisSupported={speechSynthesisSupported}
+              activeSpeechMessageId={activeSpeechMessageId}
+              onSpeakMessage={speakMessageAloud}
+              onStopSpeaking={stopSpeakingMessage}
               workspaceRoot={activeProject?.cwd ?? undefined}
             />
           </div>
@@ -4602,6 +4590,62 @@ const MessageCopyButton = memo(function MessageCopyButton({ text }: { text: stri
   );
 });
 
+const AssistantSpeechButton = memo(function AssistantSpeechButton(props: {
+  message: Pick<ChatMessage, "id" | "role" | "streaming" | "text">;
+  supported: boolean;
+  activeMessageId: string | null;
+  onSpeak: (messageId: string, rawText: string) => void;
+  onStop: () => void;
+}) {
+  if (!props.supported) {
+    return null;
+  }
+
+  if (props.message.streaming) {
+    return (
+      <Button
+        type="button"
+        size="xs"
+        variant="outline"
+        className="shrink-0"
+        disabled
+        title="Available when response finishes"
+        aria-label="Read assistant message aloud when the response finishes"
+      >
+        <Volume2Icon className="size-3" />
+        <span>Read aloud</span>
+      </Button>
+    );
+  }
+
+  if (!canReadMessage(props.message)) {
+    return null;
+  }
+
+  const isActive = props.activeMessageId === props.message.id;
+  return (
+    <Button
+      type="button"
+      size="xs"
+      variant="outline"
+      className="shrink-0"
+      aria-label={isActive ? "Stop reading assistant message aloud" : "Read assistant message aloud"}
+      aria-pressed={isActive}
+      title={isActive ? "Stop reading aloud" : "Read aloud"}
+      onClick={() => {
+        if (isActive) {
+          props.onStop();
+          return;
+        }
+        props.onSpeak(props.message.id, props.message.text);
+      }}
+    >
+      {isActive ? <SquareIcon className="size-3" /> : <Volume2Icon className="size-3" />}
+      <span>{isActive ? "Stop" : "Read aloud"}</span>
+    </Button>
+  );
+});
+
 function hasNonZeroStat(stat: { additions: number; deletions: number }): boolean {
   return stat.additions > 0 || stat.deletions > 0;
 }
@@ -4955,6 +4999,10 @@ interface MessagesTimelineProps {
   onImageExpand: (preview: ExpandedImagePreview) => void;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
+  speechSynthesisSupported: boolean;
+  activeSpeechMessageId: string | null;
+  onSpeakMessage: (messageId: string, rawText: string) => void;
+  onStopSpeaking: () => void;
   workspaceRoot: string | undefined;
 }
 
@@ -5009,6 +5057,10 @@ const MessagesTimeline = memo(function MessagesTimeline({
   onImageExpand,
   markdownCwd,
   resolvedTheme,
+  speechSynthesisSupported,
+  activeSpeechMessageId,
+  onSpeakMessage,
+  onStopSpeaking,
   workspaceRoot,
 }: MessagesTimelineProps) {
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
@@ -5446,14 +5498,23 @@ const MessagesTimeline = memo(function MessagesTimeline({
                     </div>
                   );
                 })()}
-                <p className="mt-1.5 text-[10px] text-muted-foreground/30">
-                  {formatMessageMeta(
-                    row.message.createdAt,
-                    row.message.streaming
-                      ? formatElapsed(row.message.createdAt, nowIso)
-                      : formatElapsed(row.message.createdAt, row.message.completedAt),
-                  )}
-                </p>
+                <div className="mt-1.5 flex items-center justify-between gap-3">
+                  <AssistantSpeechButton
+                    message={row.message}
+                    supported={speechSynthesisSupported}
+                    activeMessageId={activeSpeechMessageId}
+                    onSpeak={onSpeakMessage}
+                    onStop={onStopSpeaking}
+                  />
+                  <p className="ml-auto text-right text-[10px] text-muted-foreground/30">
+                    {formatMessageMeta(
+                      row.message.createdAt,
+                      row.message.streaming
+                        ? formatElapsed(row.message.createdAt, nowIso)
+                        : formatElapsed(row.message.createdAt, row.message.completedAt),
+                    )}
+                  </p>
+                </div>
               </div>
             </>
           );

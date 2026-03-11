@@ -146,6 +146,87 @@ function createAssistantMessage(options: { id: MessageId; text: string; offsetSe
   };
 }
 
+function createSnapshotWithStreamingAssistant(targetMessageId: MessageId): OrchestrationReadModel {
+  const snapshot = createSnapshotForTargetUser({
+    targetMessageId: "msg-user-streaming-target" as MessageId,
+    targetText: "streaming thread",
+  });
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      Object.assign({}, thread, {
+        messages: thread.messages.map((message) =>
+          message.id === targetMessageId
+            ? Object.assign({}, message, { streaming: true, updatedAt: message.createdAt })
+            : message,
+        ),
+      }),
+    ),
+  };
+}
+
+type MockSpeechSynthesisUtteranceInstance = {
+  readonly text: string;
+  readonly listeners: Map<string, Array<(event?: unknown) => void>>;
+  pitch?: number;
+  rate?: number;
+  voice?: { name: string; lang: string } | null;
+  volume?: number;
+};
+
+interface MockSpeechSynthesisController {
+  readonly cancel: ReturnType<typeof vi.fn>;
+  readonly getVoices: ReturnType<typeof vi.fn>;
+  readonly speak: ReturnType<typeof vi.fn>;
+  readonly utterances: MockSpeechSynthesisUtteranceInstance[];
+}
+
+function installSpeechSynthesisMocks(options?: {
+  voices?: Array<{ name: string; lang: string; default?: boolean; localService?: boolean }>;
+}): MockSpeechSynthesisController {
+  const utterances: MockSpeechSynthesisUtteranceInstance[] = [];
+  const voices =
+    options?.voices ?? [
+      {
+        name: "Microsoft Aria Online (Natural)",
+        lang: "en-US",
+        default: false,
+        localService: false,
+      },
+    ];
+
+  class FakeSpeechSynthesisUtterance {
+    readonly text: string;
+    readonly listeners = new Map<string, Array<(event?: unknown) => void>>();
+
+    constructor(text: string) {
+      this.text = text;
+      utterances.push(this);
+    }
+
+    addEventListener(type: string, listener: (event?: unknown) => void) {
+      const listeners = this.listeners.get(type) ?? [];
+      listeners.push(listener);
+      this.listeners.set(type, listeners);
+    }
+  }
+
+  const cancel = vi.fn();
+  const getVoices = vi.fn(() => voices);
+  const speak = vi.fn();
+
+  vi.stubGlobal("speechSynthesis", { cancel, getVoices, speak });
+  vi.stubGlobal("SpeechSynthesisUtterance", FakeSpeechSynthesisUtterance);
+
+  return {
+    cancel,
+    getVoices,
+    speak,
+    utterances,
+  };
+}
+
 function createSnapshotForTargetUser(options: {
   targetMessageId: MessageId;
   targetText: string;
@@ -464,6 +545,19 @@ async function waitForInteractionModeButton(expectedLabel: "Chat" | "Plan"): Pro
   );
 }
 
+async function waitForMessageActionButton(options: {
+  messageId: MessageId;
+  ariaLabel: string;
+}): Promise<HTMLButtonElement> {
+  return waitForElement(
+    () =>
+      document.querySelector<HTMLButtonElement>(
+        `[data-message-id="${options.messageId}"] button[aria-label="${options.ariaLabel}"]`,
+      ),
+    `Unable to find "${options.ariaLabel}" on message ${options.messageId}.`,
+  );
+}
+
 async function waitForImagesToLoad(scope: ParentNode): Promise<void> {
   const images = Array.from(scope.querySelectorAll("img"));
   if (images.length === 0) {
@@ -649,6 +743,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     document.body.innerHTML = "";
   });
 
@@ -811,6 +906,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           createdAt: NOW_ISO,
           runtimeMode: "full-access",
           interactionMode: "default",
+          title: "New thread",
           branch: null,
           worktreePath: null,
           envMode: "local",
@@ -958,5 +1054,197 @@ describe("ChatView timeline estimator parity (full app)", () => {
     } finally {
       await mounted.cleanup();
     }
+  });
+
+  it("renders a read-aloud control for completed assistant messages and speaks on click", async () => {
+    const speech = installSpeechSynthesisMocks();
+    const targetMessageId = "msg-assistant-21" as MessageId;
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-tts-target" as MessageId,
+        targetText: "tts target",
+      }),
+    });
+
+    try {
+      const readButton = await waitForMessageActionButton({
+        messageId: targetMessageId,
+        ariaLabel: "Read assistant message aloud",
+      });
+      readButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(speech.speak).toHaveBeenCalledTimes(1);
+          expect(speech.utterances[0]?.text).toBe("assistant filler 21");
+          expect(speech.utterances[0]?.voice?.name).toBe("Microsoft Aria Online (Natural)");
+          expect(speech.utterances[0]?.rate).toBe(0.92);
+          expect(speech.utterances[0]?.pitch).toBe(1.08);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      expect(
+        await waitForMessageActionButton({
+          messageId: targetMessageId,
+          ariaLabel: "Stop reading assistant message aloud",
+        }),
+      ).toBeTruthy();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("stops playback when the active assistant message control is pressed again", async () => {
+    const speech = installSpeechSynthesisMocks();
+    const targetMessageId = "msg-assistant-21" as MessageId;
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-tts-stop" as MessageId,
+        targetText: "tts stop",
+      }),
+    });
+
+    try {
+      const readButton = await waitForMessageActionButton({
+        messageId: targetMessageId,
+        ariaLabel: "Read assistant message aloud",
+      });
+      readButton.click();
+
+      const stopButton = await waitForMessageActionButton({
+        messageId: targetMessageId,
+        ariaLabel: "Stop reading assistant message aloud",
+      });
+      stopButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(speech.cancel).toHaveBeenCalledTimes(1);
+          expect(
+            document.querySelector(
+              `[data-message-id="${targetMessageId}"] button[aria-label="Read assistant message aloud"]`,
+            ),
+          ).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("cancels the current utterance before speaking a different assistant message", async () => {
+    const speech = installSpeechSynthesisMocks();
+    const firstMessageId = "msg-assistant-20" as MessageId;
+    const secondMessageId = "msg-assistant-21" as MessageId;
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-tts-switch" as MessageId,
+        targetText: "tts switch",
+      }),
+    });
+
+    try {
+      (await waitForMessageActionButton({
+        messageId: firstMessageId,
+        ariaLabel: "Read assistant message aloud",
+      })).click();
+
+      (await waitForMessageActionButton({
+        messageId: secondMessageId,
+        ariaLabel: "Read assistant message aloud",
+      })).click();
+
+      await vi.waitFor(
+        () => {
+          expect(speech.cancel).toHaveBeenCalledTimes(1);
+          expect(speech.speak).toHaveBeenCalledTimes(2);
+          expect(
+            document.querySelector(
+              `[data-message-id="${secondMessageId}"] button[aria-label="Stop reading assistant message aloud"]`,
+            ),
+          ).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("renders a disabled read-aloud control while an assistant message is still streaming", async () => {
+    installSpeechSynthesisMocks();
+    const targetMessageId = "msg-assistant-21" as MessageId;
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithStreamingAssistant(targetMessageId),
+    });
+
+    try {
+      const disabledButton = await waitForMessageActionButton({
+        messageId: targetMessageId,
+        ariaLabel: "Read assistant message aloud when the response finishes",
+      });
+
+      expect(disabledButton.disabled).toBe(true);
+      expect(disabledButton.title).toBe("Available when response finishes");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("omits read-aloud controls when browser speech synthesis is unavailable", async () => {
+    vi.stubGlobal("speechSynthesis", undefined);
+    vi.stubGlobal("SpeechSynthesisUtterance", undefined);
+    const targetMessageId = "msg-assistant-21" as MessageId;
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-tts-unsupported" as MessageId,
+        targetText: "tts unsupported",
+      }),
+    });
+
+    try {
+      await waitForElement(
+        () => document.querySelector(`[data-message-id="${targetMessageId}"]`),
+        `Unable to find assistant message ${targetMessageId}.`,
+      );
+
+      expect(
+        document.querySelector(
+          `[data-message-id="${targetMessageId}"] button[aria-label="Read assistant message aloud"]`,
+        ),
+      ).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("cancels active speech when ChatView unmounts", async () => {
+    const speech = installSpeechSynthesisMocks();
+    const targetMessageId = "msg-assistant-21" as MessageId;
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-tts-cleanup" as MessageId,
+        targetText: "tts cleanup",
+      }),
+    });
+
+    try {
+      (await waitForMessageActionButton({
+        messageId: targetMessageId,
+        ariaLabel: "Read assistant message aloud",
+      })).click();
+    } finally {
+      await mounted.cleanup();
+    }
+
+    expect(speech.cancel).toHaveBeenCalledTimes(1);
   });
 });

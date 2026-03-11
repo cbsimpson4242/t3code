@@ -109,6 +109,31 @@ function nextDeskOffset(existingOffsets: OfficePoint[]): OfficePoint {
   };
 }
 
+const OFFICE_GROUP_ACCENTS = [
+  "#fb7185",
+  "#f59e0b",
+  "#22c55e",
+  "#06b6d4",
+  "#3b82f6",
+  "#8b5cf6",
+  "#ec4899",
+  "#14b8a6",
+  "#f97316",
+  "#84cc16",
+] as const;
+
+function hashString(value: string): number {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+}
+
+function accentColorForGroupKey(groupKey: string): string {
+  return OFFICE_GROUP_ACCENTS[hashString(groupKey) % OFFICE_GROUP_ACCENTS.length]!;
+}
+
 export function deriveOfficeInputs(
   projects: Project[],
   threads: Thread[],
@@ -161,6 +186,7 @@ export function deriveOfficeInputs(
         title: thread.title,
         model: thread.model,
         groupKey: group.key,
+        accentColor: accentColorForGroupKey(group.key),
         isActive:
           thread.session?.status === "running" ||
           thread.session?.orchestrationStatus === "running" ||
@@ -272,6 +298,7 @@ export function buildOfficeScene(input: {
       key: group.key,
       label: group.label,
       cwd: group.cwd,
+      accentColor: accentColorForGroupKey(group.key),
       anchor: {
         key: group.key,
         x: anchor.x,
