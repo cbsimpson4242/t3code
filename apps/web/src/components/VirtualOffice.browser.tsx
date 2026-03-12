@@ -259,16 +259,6 @@ function getWindowButtonByAriaLabel(threadId: string, label: string): HTMLButton
   return button;
 }
 
-async function hoverOfficeBot(threadId: string) {
-  const bot = getRequiredElement<HTMLElement>(`[data-office-bot='${threadId}']`);
-  bot.dispatchEvent(
-    new MouseEvent("mouseover", {
-      bubbles: true,
-    }),
-  );
-  await waitForOfficeLayout();
-}
-
 function getDialogButtonByText(text: string): HTMLButtonElement {
   const dialog = document.querySelector<HTMLElement>("[data-slot='dialog-popup']");
   if (!dialog) {
@@ -344,6 +334,40 @@ describe("VirtualOffice interactions", () => {
       await waitForOfficeLayout();
 
       expect(readCameraAttr("data-camera-zoom")).toBe(zoomBefore);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps office thread windows in the world so they move and scale with the camera", async () => {
+    const mounted = await mountOffice();
+    try {
+      getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").click();
+      await waitForOfficeLayout();
+
+      const viewport = getRequiredElement<HTMLElement>("[data-testid='virtual-office-viewport']");
+      const viewportRect = viewport.getBoundingClientRect();
+      const windowBefore = getWindow("thread-a").getBoundingClientRect();
+
+      await panViewport({ x: 120, y: 64 });
+
+      const windowAfterPan = getWindow("thread-a").getBoundingClientRect();
+      expect(windowAfterPan.x).toBeGreaterThan(windowBefore.x + 80);
+      expect(windowAfterPan.y).toBeGreaterThan(windowBefore.y + 40);
+
+      viewport.dispatchEvent(
+        new WheelEvent("wheel", {
+          bubbles: true,
+          clientX: viewportRect.left + viewportRect.width / 2,
+          clientY: viewportRect.top + viewportRect.height / 2,
+          deltaY: -220,
+        }),
+      );
+      await waitForOfficeLayout();
+
+      const windowAfterZoom = getWindow("thread-a").getBoundingClientRect();
+      expect(windowAfterZoom.width).toBeGreaterThan(windowAfterPan.width + 60);
+      expect(windowAfterZoom.height).toBeGreaterThan(windowAfterPan.height + 40);
     } finally {
       await mounted.cleanup();
     }
@@ -488,7 +512,7 @@ describe("VirtualOffice interactions", () => {
     }
   });
 
-  it("renames a draft agent from the office hover card", async () => {
+  it("renames a draft agent from the office chat window title", async () => {
     const mounted = await mountOffice();
     try {
       getButtonByText("Create Agent").click();
@@ -506,23 +530,22 @@ describe("VirtualOffice interactions", () => {
         throw new Error("Missing created draft thread");
       }
 
-      getWindowButtonByAriaLabel(draftThread.threadId, "Close office thread window").click();
-      await waitForOfficeLayout();
-
-      await hoverOfficeBot(draftThread.threadId);
-      getButtonByText("Rename").click();
+      getRequiredElement<HTMLButtonElement>(`[data-office-thread-title-button='${draftThread.threadId}']`).click();
       await waitForOfficeLayout();
 
       const renameInput = getRequiredElement<HTMLInputElement>(
-        `[data-office-rename-input='${draftThread.threadId}']`,
+        `[data-office-thread-title-input='${draftThread.threadId}']`,
       );
       setInputValue(renameInput, "Renamed agent");
-      getButtonByText("Save").click();
+      renameInput.blur();
       await waitForOfficeLayout();
 
       expect(useComposerDraftStore.getState().getDraftThread(draftThread.threadId)?.title).toBe(
         "Renamed agent",
       );
+      expect(
+        getRequiredElement<HTMLElement>(`[data-office-thread-title-button='${draftThread.threadId}']`).textContent,
+      ).toContain("Renamed agent");
       expect(
         getRequiredElement<HTMLElement>(`[data-office-desk='${draftThread.threadId}']`).textContent,
       ).toContain("Renamed agent");

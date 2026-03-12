@@ -5,9 +5,9 @@ import type { ThreadId } from "@t3tools/contracts";
 import ChatView from "~/components/ChatView";
 import { Button } from "~/components/ui/button";
 import { SidebarProvider } from "~/components/ui/sidebar";
+import type { OfficePoint } from "~/office/officeTypes";
 import type { Project, Thread } from "~/types";
 
-const WINDOW_MARGIN = 16;
 const DEFAULT_WINDOW_WIDTH = 920;
 const DEFAULT_WINDOW_HEIGHT = 620;
 const MIN_WINDOW_WIDTH = 420;
@@ -21,15 +21,10 @@ export interface OfficeThreadWindowRect {
   height: number;
 }
 
-export interface OfficeThreadWindowViewport {
-  width: number;
-  height: number;
-}
-
 interface OfficeThreadWindowProps {
   threadId: ThreadId;
   rect: OfficeThreadWindowRect;
-  viewport: OfficeThreadWindowViewport;
+  zoom: number;
   zIndex: number;
   isFocused: boolean;
   accentColor: string;
@@ -37,6 +32,7 @@ interface OfficeThreadWindowProps {
   threads: Thread[];
   onClose: () => void;
   onDelete: (threadId: ThreadId) => Promise<void> | void;
+  onRename: (threadId: ThreadId, title: string) => Promise<void> | void;
   onFocus: () => void;
   onRectChange: (rect: OfficeThreadWindowRect) => void;
   onOpenInMainWindow?: ((threadId: ThreadId) => void) | undefined;
@@ -52,50 +48,42 @@ function rectsEqual(a: OfficeThreadWindowRect, b: OfficeThreadWindowRect) {
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }
 
-export function clampOfficeThreadWindowRect(
-  rect: OfficeThreadWindowRect,
-  viewport: OfficeThreadWindowViewport,
-): OfficeThreadWindowRect {
-  const maxWidth = Math.max(280, viewport.width - WINDOW_MARGIN * 2);
-  const maxHeight = Math.max(220, viewport.height - WINDOW_MARGIN * 2);
-  const minWidth = Math.min(MIN_WINDOW_WIDTH, maxWidth);
-  const minHeight = Math.min(MIN_WINDOW_HEIGHT, maxHeight);
+export function normalizeOfficeThreadWindowRect(rect: OfficeThreadWindowRect): OfficeThreadWindowRect {
+  const minWidth = MIN_WINDOW_WIDTH;
+  const minHeight = MIN_WINDOW_HEIGHT;
   const width = clamp(
     rect.width,
     minWidth,
-    maxWidth,
+    Number.POSITIVE_INFINITY,
   );
   const height = clamp(
     rect.height,
     minHeight,
-    maxHeight,
+    Number.POSITIVE_INFINITY,
   );
 
   return {
     width,
     height,
-    x: clamp(rect.x, WINDOW_MARGIN, Math.max(WINDOW_MARGIN, viewport.width - width - WINDOW_MARGIN)),
-    y: clamp(rect.y, WINDOW_MARGIN, Math.max(WINDOW_MARGIN, viewport.height - height - WINDOW_MARGIN)),
+    x: rect.x,
+    y: rect.y,
   };
 }
 
 export function buildDefaultOfficeThreadWindowRect(
-  viewport: OfficeThreadWindowViewport,
+  anchor: OfficePoint,
   stackIndex = 0,
 ): OfficeThreadWindowRect {
-  const width = Math.min(DEFAULT_WINDOW_WIDTH, Math.max(280, viewport.width - WINDOW_MARGIN * 2));
-  const height = Math.min(DEFAULT_WINDOW_HEIGHT, Math.max(220, viewport.height - WINDOW_MARGIN * 2));
+  const width = DEFAULT_WINDOW_WIDTH;
+  const height = DEFAULT_WINDOW_HEIGHT;
   const cascadeStep = mod(stackIndex, 6) * WINDOW_CASCADE_OFFSET;
 
-  return clampOfficeThreadWindowRect(
-    {
-      width,
-      height,
-      x: Math.max(WINDOW_MARGIN, Math.round((viewport.width - width) / 2) + cascadeStep),
-      y: Math.max(WINDOW_MARGIN, Math.round((viewport.height - height) / 2) + cascadeStep),
-    },
-    viewport,
-  );
+  return normalizeOfficeThreadWindowRect({
+    width,
+    height,
+    x: anchor.x + 64 + cascadeStep,
+    y: anchor.y - 72 + cascadeStep * 0.5,
+  });
 }
 
 function mod(value: number, divisor: number) {
@@ -108,7 +96,7 @@ function mod(value: number, divisor: number) {
 export default function OfficeThreadWindow({
   threadId,
   rect,
-  viewport,
+  zoom,
   zIndex,
   isFocused,
   accentColor,
@@ -116,6 +104,7 @@ export default function OfficeThreadWindow({
   threads,
   onClose,
   onDelete,
+  onRename,
   onFocus,
   onRectChange,
   onOpenInMainWindow,
@@ -134,6 +123,9 @@ export default function OfficeThreadWindow({
     direction: ResizeDirection;
   }>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renamingTitle, setRenamingTitle] = useState("");
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
   const thread = useMemo(() => threads.find((entry) => entry.id === threadId) ?? null, [threadId, threads]);
   const project = useMemo(
     () => (thread ? projects.find((entry) => entry.id === thread.projectId) ?? null : null),
@@ -141,11 +133,20 @@ export default function OfficeThreadWindow({
   );
 
   useEffect(() => {
-    const clampedRect = clampOfficeThreadWindowRect(rect, viewport);
+    const clampedRect = normalizeOfficeThreadWindowRect(rect);
     if (!rectsEqual(clampedRect, rect)) {
       onRectChange(clampedRect);
     }
-  }, [onRectChange, rect, viewport]);
+  }, [onRectChange, rect]);
+
+  useEffect(() => {
+    if (!isRenaming) {
+      setRenamingTitle(thread?.title ?? "");
+      return;
+    }
+    renameInputRef.current?.focus();
+    renameInputRef.current?.select();
+  }, [isRenaming, thread?.title]);
 
   const handleDragPointerMove = useCallback(
     (event: PointerEvent) => {
@@ -154,18 +155,16 @@ export default function OfficeThreadWindow({
         return;
       }
       event.preventDefault();
+      const zoomScale = Math.max(zoom, 0.0001);
       onRectChange(
-        clampOfficeThreadWindowRect(
-          {
-            ...dragState.startRect,
-            x: dragState.startRect.x + (event.clientX - dragState.startX),
-            y: dragState.startRect.y + (event.clientY - dragState.startY),
-          },
-          viewport,
-        ),
+        normalizeOfficeThreadWindowRect({
+          ...dragState.startRect,
+          x: dragState.startRect.x + (event.clientX - dragState.startX) / zoomScale,
+          y: dragState.startRect.y + (event.clientY - dragState.startY) / zoomScale,
+        }),
       );
     },
-    [onRectChange, viewport],
+    [onRectChange, zoom],
   );
 
   const handleResizePointerMove = useCallback(
@@ -175,8 +174,9 @@ export default function OfficeThreadWindow({
         return;
       }
       event.preventDefault();
-      const deltaX = event.clientX - resizeState.startX;
-      const deltaY = event.clientY - resizeState.startY;
+      const zoomScale = Math.max(zoom, 0.0001);
+      const deltaX = (event.clientX - resizeState.startX) / zoomScale;
+      const deltaY = (event.clientY - resizeState.startY) / zoomScale;
       const nextRect = { ...resizeState.startRect };
       if (resizeState.direction === "right" || resizeState.direction === "corner") {
         nextRect.width = resizeState.startRect.width + deltaX;
@@ -184,9 +184,9 @@ export default function OfficeThreadWindow({
       if (resizeState.direction === "bottom" || resizeState.direction === "corner") {
         nextRect.height = resizeState.startRect.height + deltaY;
       }
-      onRectChange(clampOfficeThreadWindowRect(nextRect, viewport));
+      onRectChange(normalizeOfficeThreadWindowRect(nextRect));
     },
-    [onRectChange, viewport],
+    [onRectChange, zoom],
   );
 
   useEffect(() => {
@@ -224,6 +224,16 @@ export default function OfficeThreadWindow({
     }
   };
 
+  const cancelRename = useCallback(() => {
+    setIsRenaming(false);
+    setRenamingTitle(thread?.title ?? "");
+  }, [thread?.title]);
+
+  const commitRename = useCallback(async () => {
+    await onRename(threadId, renamingTitle);
+    setIsRenaming(false);
+  }, [onRename, renamingTitle, threadId]);
+
   const shell = (
     <div
       className="pointer-events-auto relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[24px] border bg-background/96 shadow-2xl backdrop-blur-xl"
@@ -247,7 +257,11 @@ export default function OfficeThreadWindow({
         }}
         data-office-thread-drag-handle={threadId}
         onPointerDown={(event) => {
-          if (event.button !== 0 || (event.target instanceof HTMLElement && event.target.closest("button"))) {
+          if (
+            event.button !== 0 ||
+            (event.target instanceof HTMLElement &&
+              event.target.closest("button, input, [data-office-thread-title-interactive='true']"))
+          ) {
             return;
           }
           dragStateRef.current = {
@@ -265,9 +279,47 @@ export default function OfficeThreadWindow({
           aria-hidden="true"
         />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold text-foreground">
-            {thread?.title ?? "New thread"}
-          </div>
+          {isRenaming ? (
+            <input
+              ref={renameInputRef}
+              data-office-thread-title-input={threadId}
+              data-office-thread-title-interactive="true"
+              className="w-full rounded-md border border-input bg-background px-2 py-1 text-sm font-semibold text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              value={renamingTitle}
+              onChange={(event) => setRenamingTitle(event.target.value)}
+              onClick={(event) => event.stopPropagation()}
+              onPointerDown={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void commitRename();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  cancelRename();
+                }
+              }}
+              onBlur={() => {
+                void commitRename();
+              }}
+              aria-label={`Rename title for ${thread?.title ?? "thread"}`}
+            />
+          ) : (
+            <button
+              type="button"
+              data-office-thread-title-button={threadId}
+              data-office-thread-title-interactive="true"
+              className="block w-full truncate text-left text-sm font-semibold text-foreground outline-none transition-colors hover:text-primary focus-visible:text-primary"
+              onClick={(event) => {
+                event.stopPropagation();
+                setRenamingTitle(thread?.title ?? "");
+                setIsRenaming(true);
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              {thread?.title ?? "New thread"}
+            </button>
+          )}
           <div className="truncate text-xs text-muted-foreground">
             {project?.name ?? "Draft agent"}
           </div>
