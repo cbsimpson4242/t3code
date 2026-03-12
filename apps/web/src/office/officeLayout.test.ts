@@ -177,6 +177,40 @@ describe("officeLayout", () => {
     expect(untouchedDesk.element).toMatchObject(beforeDeskPositions.get("thread-2")!);
   });
 
+  it("honors persisted group frame sizes", () => {
+    const projects = [makeProject("project-1", "project-a")];
+    const threads = [
+      makeThread({ id: "thread-1", projectId: "project-1", title: "Thread 1", worktreePath: "group-a" }),
+      makeThread({ id: "thread-2", projectId: "project-1", title: "Thread 2", worktreePath: "group-a" }),
+    ];
+    const inputs = deriveOfficeInputs(projects, threads);
+    const firstBuild = buildOfficeScene({
+      ...inputs,
+      persistedState: createDefaultOfficePersistedState(),
+    });
+
+    const nextBuild = buildOfficeScene({
+      ...inputs,
+      persistedState: {
+        ...firstBuild.persistedState,
+        projectGroupSizesByKey: {
+          ...firstBuild.persistedState.projectGroupSizesByKey,
+          "group-a": {
+            width: firstBuild.scene.groups[0]!.element.width + 180,
+            height: firstBuild.scene.groups[0]!.element.height + 120,
+          },
+        },
+      },
+    });
+
+    expect(nextBuild.scene.groups[0]!.element.width).toBe(firstBuild.scene.groups[0]!.element.width + 180);
+    expect(nextBuild.scene.groups[0]!.element.height).toBe(firstBuild.scene.groups[0]!.element.height + 120);
+    expect(nextBuild.persistedState.projectGroupSizesByKey["group-a"]).toEqual({
+      width: firstBuild.scene.groups[0]!.element.width + 180,
+      height: firstBuild.scene.groups[0]!.element.height + 120,
+    });
+  });
+
   it("marks desks that have pending user attention", () => {
     const projects = [makeProject("project-1", "project-a")];
     const thread = makeThread({
@@ -210,7 +244,7 @@ describe("officeLayout", () => {
     });
   });
 
-  it("assigns stable accent colors by group key", () => {
+  it("assigns stable accent colors by group key and honors persisted overrides", () => {
     const projects = [makeProject("project-1", "project-a"), makeProject("project-2", "project-b")];
     const threads = [
       makeThread({ id: "thread-1", projectId: "project-1", title: "Thread 1", worktreePath: "group-a" }),
@@ -222,12 +256,55 @@ describe("officeLayout", () => {
       [...projects, makeProject("project-3", "project-c")],
       [...threads, makeThread({ id: "thread-3", projectId: "project-3", title: "Thread 3", worktreePath: "group-c" })],
     );
+    const overriddenInputs = deriveOfficeInputs(projects, threads, {
+      "group-a": "#06b6d4",
+    });
+    const overriddenBuild = buildOfficeScene({
+      groups: overriddenInputs.groups,
+      desks: overriddenInputs.desks,
+      persistedState: {
+        ...createDefaultOfficePersistedState(),
+        groupAccentColorsByKey: {
+          "group-a": "#06b6d4",
+        },
+      },
+    });
 
     const firstGroupA = firstInputs.desks.find((desk) => desk.groupKey === "group-a");
     const secondGroupA = secondInputs.desks.find((desk) => desk.groupKey === "group-a");
     const firstGroupB = firstInputs.desks.find((desk) => desk.groupKey === "group-b");
+    const overriddenGroupA = overriddenInputs.desks.find((desk) => desk.groupKey === "group-a");
 
     expect(firstGroupA?.accentColor).toBe(secondGroupA?.accentColor);
     expect(firstGroupA?.accentColor).not.toBe(firstGroupB?.accentColor);
+    expect(overriddenGroupA?.accentColor).toBe("#06b6d4");
+    expect(overriddenBuild.scene.groups.find((group) => group.key === "group-a")?.accentColor).toBe("#06b6d4");
+  });
+
+  it("preserves customized furniture sets without restoring removed defaults", () => {
+    const projects = [makeProject("project-1", "project-a")];
+    const threads = [makeThread({ id: "thread-1", projectId: "project-1", title: "Thread 1", worktreePath: "group-a" })];
+    const persistedState = createDefaultOfficePersistedState();
+    persistedState.furniture = persistedState.furniture.filter(
+      (element) => element.id !== "water-cooler" && element.parentId !== "conference-table",
+    );
+    persistedState.furniture.push({
+      id: "plant-extra",
+      type: "plant",
+      x: 1200,
+      y: 220,
+      width: 56,
+      height: 70,
+      draggable: true,
+    });
+
+    const inputs = deriveOfficeInputs(projects, threads);
+    const build = buildOfficeScene({
+      ...inputs,
+      persistedState,
+    });
+
+    expect(build.scene.furniture.some((element) => element.id === "water-cooler")).toBe(false);
+    expect(build.scene.furniture.some((element) => element.id === "plant-extra")).toBe(true);
   });
 });

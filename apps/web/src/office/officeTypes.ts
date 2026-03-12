@@ -53,11 +53,14 @@ export interface OfficeDeskOffset extends OfficePoint {
 }
 
 export interface OfficePersistedState {
-  version: 1;
+  version: 2;
   camera: OfficeCameraState;
-  elementsById: Record<OfficeElementId, OfficePoint>;
+  furniture: OfficeElement[];
   projectGroupAnchors: Record<string, OfficePoint>;
+  projectGroupSizesByKey: Record<string, OfficeSize>;
   deskOffsetsByThreadId: Record<string, OfficePoint>;
+  groupAccentColorsByKey: Record<string, string>;
+  adminDeskPosition: OfficePoint;
 }
 
 export interface OfficeProjectGroupInput {

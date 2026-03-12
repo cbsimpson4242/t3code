@@ -93,6 +93,31 @@ function mod(value: number, divisor: number) {
   return ((value % divisor) + divisor) % divisor;
 }
 
+function summarizeLastUserMessage(thread: Thread | null): string {
+  if (!thread) {
+    return "No user message yet";
+  }
+
+  for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
+    const message = thread.messages[index];
+    if (!message || message.role !== "user") {
+      continue;
+    }
+
+    const normalizedText = message.text.replace(/\s+/g, " ").trim();
+    if (normalizedText.length > 0) {
+      return normalizedText.length > 140 ? `${normalizedText.slice(0, 137)}...` : normalizedText;
+    }
+
+    const attachmentCount = message.attachments?.length ?? 0;
+    if (attachmentCount > 0) {
+      return attachmentCount === 1 ? "Sent 1 attachment" : `Sent ${attachmentCount} attachments`;
+    }
+  }
+
+  return "No user message yet";
+}
+
 export default function OfficeThreadWindow({
   threadId,
   rect,
@@ -131,6 +156,7 @@ export default function OfficeThreadWindow({
     () => (thread ? projects.find((entry) => entry.id === thread.projectId) ?? null : null),
     [projects, thread],
   );
+  const lastUserMessageSummary = useMemo(() => summarizeLastUserMessage(thread), [thread]);
 
   useEffect(() => {
     const clampedRect = normalizeOfficeThreadWindowRect(rect);
@@ -322,6 +348,21 @@ export default function OfficeThreadWindow({
           )}
           <div className="truncate text-xs text-muted-foreground">
             {project?.name ?? "Draft agent"}
+          </div>
+          <div
+            className="mt-2 max-w-[34rem] rounded-2xl border px-3 py-2 text-[11px] leading-4 shadow-sm backdrop-blur-sm"
+            style={{
+              borderColor: `${accentColor}42`,
+              backgroundColor: `${accentColor}12`,
+              boxShadow: `0 12px 30px -24px ${accentColor}cc`,
+            }}
+            data-office-thread-last-user-message={threadId}
+            title={lastUserMessageSummary}
+          >
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/75">
+              Last user message
+            </div>
+            <div className="line-clamp-2 text-foreground/90">{lastUserMessageSummary}</div>
           </div>
         </div>
         {onOpenInMainWindow ? (

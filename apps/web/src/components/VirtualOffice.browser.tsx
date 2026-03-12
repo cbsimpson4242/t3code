@@ -1,6 +1,6 @@
 import "../index.css";
 
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { EventId, MessageId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -38,6 +38,7 @@ function makeThread(input: {
   projectId: string;
   title: string;
   worktreePath: string;
+  messages?: Thread["messages"];
 }): Thread {
   return {
     id: ThreadId.makeUnsafe(input.id),
@@ -48,7 +49,7 @@ function makeThread(input: {
     runtimeMode: DEFAULT_RUNTIME_MODE,
     interactionMode: DEFAULT_INTERACTION_MODE,
     session: null,
-    messages: [],
+    messages: input.messages ?? [],
     proposedPlans: [],
     error: null,
     createdAt: "2026-03-10T00:00:00.000Z",
@@ -60,11 +61,32 @@ function makeThread(input: {
   };
 }
 
+function makeUserMessage(id: string, text: string): Thread["messages"][number] {
+  return {
+    id: MessageId.makeUnsafe(id),
+    role: "user",
+    text,
+    createdAt: "2026-03-10T00:00:00.000Z",
+    streaming: false,
+  };
+}
+
 function seedOfficeStore() {
   useStore.setState({
     projects: [makeProject("project-1", "alpha"), makeProject("project-2", "beta")],
     threads: [
-      makeThread({ id: "thread-a", projectId: "project-1", title: "Desk A", worktreePath: "group-a" }),
+      makeThread({
+        id: "thread-a",
+        projectId: "project-1",
+        title: "Desk A",
+        worktreePath: "group-a",
+        messages: [
+          makeUserMessage(
+            "msg-thread-a-1",
+            "Please update the deploy script to use the new staging environment and confirm the rollback path.",
+          ),
+        ],
+      }),
       makeThread({ id: "thread-b", projectId: "project-1", title: "Desk B", worktreePath: "group-a" }),
       makeThread({ id: "thread-c", projectId: "project-2", title: "Desk C", worktreePath: "group-b" }),
     ],
@@ -199,6 +221,28 @@ async function dragSelector(selector: string, delta: { x: number; y: number }) {
   await waitForOfficeLayout();
 }
 
+async function clickSelector(selector: string) {
+  const element = getRequiredElement<HTMLElement>(selector);
+  const rect = element.getBoundingClientRect();
+  dispatchPointerSequence(element, {
+    pointerId: 7,
+    button: 0,
+    buttons: 1,
+    startX: rect.left + rect.width / 2,
+    startY: rect.top + rect.height / 2,
+    endX: rect.left + rect.width / 2,
+    endY: rect.top + rect.height / 2,
+  });
+  element.dispatchEvent(
+    new MouseEvent("click", {
+      bubbles: true,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+    }),
+  );
+  await waitForOfficeLayout();
+}
+
 async function panViewport(delta: { x: number; y: number }) {
   const viewport = getRequiredElement<HTMLElement>("[data-testid='virtual-office-viewport']");
   const rect = viewport.getBoundingClientRect();
@@ -211,6 +255,11 @@ async function panViewport(delta: { x: number; y: number }) {
     endX: rect.left + rect.width / 2 + delta.x,
     endY: rect.top + rect.height / 2 + delta.y,
   });
+  await waitForOfficeLayout();
+}
+
+async function clickDomSelector(selector: string) {
+  getRequiredElement<HTMLElement>(selector).click();
   await waitForOfficeLayout();
 }
 
@@ -227,16 +276,56 @@ function getButtonByText(text: string): HTMLButtonElement {
   return button;
 }
 
+async function clickButtonByText(text: string) {
+  const button = getButtonByText(text);
+  const rect = button.getBoundingClientRect();
+  dispatchPointerSequence(button, {
+    pointerId: 8,
+    button: 0,
+    buttons: 1,
+    startX: rect.left + rect.width / 2,
+    startY: rect.top + rect.height / 2,
+    endX: rect.left + rect.width / 2,
+    endY: rect.top + rect.height / 2,
+  });
+  button.dispatchEvent(
+    new MouseEvent("click", {
+      bubbles: true,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+    }),
+  );
+  await waitForOfficeLayout();
+}
+
 function getButtonsByText(text: string): HTMLButtonElement[] {
   return [...document.querySelectorAll<HTMLButtonElement>("button")].filter(
     (entry) => entry.textContent?.trim() === text,
   );
 }
 
+function getMenuItemByText(text: string): HTMLElement {
+  const item = [...document.querySelectorAll<HTMLElement>("[data-slot='menu-item']")].find(
+    (entry) => entry.textContent?.trim() === text,
+  );
+  if (!item) {
+    throw new Error(`Missing menu item: ${text}`);
+  }
+  return item;
+}
+
 function getWindow(threadId: string): HTMLElement {
   const element = document.querySelector<HTMLElement>(`[data-office-thread-window='${threadId}']`);
   if (!element) {
     throw new Error(`Missing office thread window: ${threadId}`);
+  }
+  return element;
+}
+
+function getAdminWindow(): HTMLElement {
+  const element = document.querySelector<HTMLElement>("[data-office-admin-window='office-admin']");
+  if (!element) {
+    throw new Error("Missing office admin window");
   }
   return element;
 }
@@ -282,6 +371,7 @@ describe("VirtualOffice interactions", () => {
 
   afterEach(() => {
     document.body.innerHTML = "";
+    Reflect.deleteProperty(window, "nativeApi");
   });
 
   it("zooms with the wheel and pans with middle mouse drag", async () => {
@@ -373,6 +463,20 @@ describe("VirtualOffice interactions", () => {
     }
   });
 
+  it("shows the last user message summary in the popup header", async () => {
+    const mounted = await mountOffice();
+    try {
+      getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").click();
+      await waitForOfficeLayout();
+
+      const summary = getRequiredElement<HTMLElement>("[data-office-thread-last-user-message='thread-a']");
+      expect(summary.textContent).toContain("Last user message");
+      expect(summary.textContent).toContain("Please update the deploy script");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("persists dragged furniture positions across remounts", async () => {
     const mounted = await mountOffice();
     try {
@@ -396,19 +500,144 @@ describe("VirtualOffice interactions", () => {
     }
   });
 
+  it("lets you change a group accent color and keeps it after remount", async () => {
+    const mounted = await mountOffice();
+    try {
+      await clickDomSelector("[data-office-group-color-trigger='group-a']");
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector("[data-office-group-color-option='group-a:#06b6d4']"),
+        ).toBeTruthy();
+      });
+      await clickDomSelector("[data-office-group-color-option='group-a:#06b6d4']");
+
+      expect(getRequiredElement<HTMLElement>("[data-office-group='group-a']").dataset.officeGroupAccent).toBe(
+        "#06b6d4",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+
+    const remounted = await mountOffice();
+    try {
+      expect(getRequiredElement<HTMLElement>("[data-office-group='group-a']").dataset.officeGroupAccent).toBe(
+        "#06b6d4",
+      );
+    } finally {
+      await remounted.cleanup();
+    }
+  });
+
+  it("moves linked chairs when the boardroom table is dragged", async () => {
+    const mounted = await mountOffice();
+    try {
+      const tableSelector = "[data-office-element='conference-table']";
+      const chairSelector = "[data-office-element='chair-1']";
+      const tableBefore = getRequiredElement<HTMLElement>(tableSelector).getBoundingClientRect();
+      const chairBefore = getRequiredElement<HTMLElement>(chairSelector).getBoundingClientRect();
+
+      await dragSelector(tableSelector, { x: 96, y: 32 });
+
+      const tableAfter = getRequiredElement<HTMLElement>(tableSelector).getBoundingClientRect();
+      const chairAfter = getRequiredElement<HTMLElement>(chairSelector).getBoundingClientRect();
+
+      expect(tableAfter.x).toBeGreaterThan(tableBefore.x + 60);
+      expect(chairAfter.x).toBeGreaterThan(chairBefore.x + 60);
+      expect(chairAfter.y).toBeGreaterThan(chairBefore.y + 16);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("lets the CEO desk move around the office and persists its position", async () => {
+    const mounted = await mountOffice();
+    try {
+      const selector = "[data-office-admin-desk='office-admin']";
+      const before = getRequiredElement<HTMLElement>(selector).getBoundingClientRect();
+
+      await dragSelector(selector, { x: 140, y: 56 });
+
+      const after = getRequiredElement<HTMLElement>(selector).getBoundingClientRect();
+      expect(after.x).toBeGreaterThan(before.x + 90);
+      expect(after.y).toBeGreaterThan(before.y + 30);
+      expect(document.querySelector("[data-office-admin-window='office-admin']")).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+
+    const remounted = await mountOffice();
+    try {
+      const remountedRect = getRequiredElement<HTMLElement>(
+        "[data-office-admin-desk='office-admin']",
+      ).getBoundingClientRect();
+      expect(remountedRect.x).toBeGreaterThan(180);
+      expect(remountedRect.y).toBeGreaterThan(100);
+    } finally {
+      await remounted.cleanup();
+    }
+  });
+
+  it("adds and removes furniture from the office toolbar", async () => {
+    const mounted = await mountOffice();
+    try {
+      const beforeCount = document.querySelectorAll("[data-office-element]").length;
+
+      getButtonByText("Add Furniture").click();
+      await waitForOfficeLayout();
+      getMenuItemByText("Plant").click();
+      await waitForOfficeLayout();
+
+      expect(document.querySelectorAll("[data-office-element]").length).toBe(beforeCount + 1);
+      expect(document.querySelector("[data-office-element-selected='true']")).toBeTruthy();
+
+      await clickButtonByText("Remove Selected");
+
+      expect(document.querySelectorAll("[data-office-element]").length).toBe(beforeCount);
+
+      await clickSelector("[data-office-element='water-cooler']");
+      await clickButtonByText("Remove Selected");
+
+      expect(document.querySelector("[data-office-element='water-cooler']")).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("deletes selected furniture with the Delete key", async () => {
+    const mounted = await mountOffice();
+    try {
+      await clickSelector("[data-office-element='plant-left']");
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          key: "Delete",
+        }),
+      );
+      await waitForOfficeLayout();
+
+      expect(document.querySelector("[data-office-element='plant-left']")).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps multiple desk windows open, draws tether indicators, and leaves the office interactive", async () => {
     const mounted = await mountOffice();
     try {
       getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").click();
       await waitForOfficeLayout();
       expect(getWindow("thread-a")).toBeTruthy();
-      expect(document.querySelector("[data-office-thread-link='thread-a']")).toBeTruthy();
+      const threadALink = document.querySelector<SVGGElement>("[data-office-thread-link='thread-a']");
+      expect(threadALink).toBeTruthy();
+      expect(threadALink?.getBoundingClientRect().width ?? 0).toBeGreaterThan(20);
 
       getRequiredElement<HTMLElement>("[data-office-desk='thread-b']").click();
       await waitForOfficeLayout();
       expect(getWindow("thread-a")).toBeTruthy();
       expect(getWindow("thread-b")).toBeTruthy();
-      expect(document.querySelector("[data-office-thread-link='thread-b']")).toBeTruthy();
+      const threadBLink = document.querySelector<SVGGElement>("[data-office-thread-link='thread-b']");
+      expect(threadBLink).toBeTruthy();
+      expect(threadBLink?.getBoundingClientRect().width ?? 0).toBeGreaterThan(20);
       expect(document.querySelector("[data-office-window-backdrop]")).toBeNull();
 
       getWindowButtonByText("thread-a", "Open in main window").click();
@@ -430,21 +659,84 @@ describe("VirtualOffice interactions", () => {
     }
   });
 
-  it("moves sibling desks with a dragged group and leaves siblings in place for a single desk drag", async () => {
+  it("shows a live thought summary bubble above a running agent", async () => {
+    useStore.setState((state) => ({
+      ...state,
+      threads: state.threads.map((thread) =>
+        thread.id !== ThreadId.makeUnsafe("thread-a")
+          ? thread
+          : {
+              ...thread,
+              latestTurn: {
+                turnId: TurnId.makeUnsafe("turn-office-active"),
+                state: "running",
+                requestedAt: "2026-03-10T00:00:01.000Z",
+                startedAt: "2026-03-10T00:00:02.000Z",
+                completedAt: null,
+                assistantMessageId: null,
+              },
+              session: {
+                provider: "codex",
+                status: "running",
+                createdAt: "2026-03-10T00:00:00.000Z",
+                updatedAt: "2026-03-10T00:00:03.000Z",
+                orchestrationStatus: "running",
+                activeTurnId: TurnId.makeUnsafe("turn-office-active"),
+              },
+              activities: [
+                {
+                  id: EventId.makeUnsafe("activity-office-thinking"),
+                  kind: "provider.item.completed",
+                  tone: "tool",
+                  summary: "Inspecting repository state",
+                  payload: {
+                    detail: "Inspecting repository state and comparing changed files before the next edit.",
+                  },
+                  turnId: TurnId.makeUnsafe("turn-office-active"),
+                  createdAt: "2026-03-10T00:00:04.000Z",
+                },
+              ],
+            },
+      ),
+    }));
+
+    const mounted = await mountOffice();
+    try {
+      await waitForOfficeLayout();
+      const thoughtBubble = document.querySelector<HTMLElement>("[data-office-bot-thought='thread-a']");
+      expect(thoughtBubble?.textContent).toContain("Inspecting repository state");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("moves sibling desks and linked chat windows with a dragged group, and leaves siblings in place for a single desk drag", async () => {
     const mounted = await mountOffice();
     try {
       const deskASelector = "[data-office-desk='thread-a']";
       const deskBSelector = "[data-office-desk='thread-b']";
 
+      getRequiredElement<HTMLElement>(deskASelector).click();
+      getRequiredElement<HTMLElement>("[data-office-desk='thread-c']").click();
+      await waitForOfficeLayout();
+
       const deskABeforeGroup = getRequiredElement<HTMLElement>(deskASelector).getBoundingClientRect();
       const deskBBeforeGroup = getRequiredElement<HTMLElement>(deskBSelector).getBoundingClientRect();
+      const windowABeforeGroup = getWindow("thread-a").getBoundingClientRect();
+      const windowCBeforeGroup = getWindow("thread-c").getBoundingClientRect();
 
       await dragSelector("[data-office-group='group-a']", { x: 90, y: 36 });
 
       const deskAAfterGroup = getRequiredElement<HTMLElement>(deskASelector).getBoundingClientRect();
       const deskBAfterGroup = getRequiredElement<HTMLElement>(deskBSelector).getBoundingClientRect();
+      const windowAAfterGroup = getWindow("thread-a").getBoundingClientRect();
+      const windowCAfterGroup = getWindow("thread-c").getBoundingClientRect();
       expect(deskAAfterGroup.x).toBeGreaterThan(deskABeforeGroup.x + 50);
       expect(deskBAfterGroup.x).toBeGreaterThan(deskBBeforeGroup.x + 50);
+      expect(windowAAfterGroup.x).toBeGreaterThan(windowABeforeGroup.x + 50);
+      expect(windowAAfterGroup.y).toBeGreaterThan(windowABeforeGroup.y + 20);
+      expect(Math.abs(windowCAfterGroup.x - windowCBeforeGroup.x)).toBeLessThan(8);
+      expect(Math.abs(windowCAfterGroup.y - windowCBeforeGroup.y)).toBeLessThan(8);
 
       const deskBBeforeSingleDrag = getRequiredElement<HTMLElement>(deskBSelector).getBoundingClientRect();
       await dragSelector(deskASelector, { x: 54, y: 18 });
@@ -453,6 +745,29 @@ describe("VirtualOffice interactions", () => {
 
       expect(deskAAfterSingleDrag.x).toBeGreaterThan(deskAAfterGroup.x + 30);
       expect(Math.abs(deskBAfterSingleDrag.x - deskBBeforeSingleDrag.x)).toBeLessThan(8);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("resizes a project group from the corner and rescales desk spacing inside it", async () => {
+    const mounted = await mountOffice();
+    try {
+      const groupBefore = getRequiredElement<HTMLElement>("[data-office-group='group-a']").getBoundingClientRect();
+      const deskABefore = getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").getBoundingClientRect();
+      const deskBBefore = getRequiredElement<HTMLElement>("[data-office-desk='thread-b']").getBoundingClientRect();
+      const gapBefore = Math.abs(deskBBefore.x - deskABefore.x);
+
+      await dragSelector("[data-office-group-resize='group-a']", { x: 160, y: 110 });
+
+      const groupAfter = getRequiredElement<HTMLElement>("[data-office-group='group-a']").getBoundingClientRect();
+      const deskAAfter = getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").getBoundingClientRect();
+      const deskBAfter = getRequiredElement<HTMLElement>("[data-office-desk='thread-b']").getBoundingClientRect();
+      const gapAfter = Math.abs(deskBAfter.x - deskAAfter.x);
+
+      expect(groupAfter.width).toBeGreaterThan(groupBefore.width + 120);
+      expect(groupAfter.height).toBeGreaterThan(groupBefore.height + 80);
+      expect(gapAfter).toBeGreaterThan(gapBefore + 40);
     } finally {
       await mounted.cleanup();
     }
@@ -507,6 +822,63 @@ describe("VirtualOffice interactions", () => {
       ).toBeNull();
       expect(document.querySelector(`[data-office-thread-window='${draftThread.threadId}']`)).toBeNull();
       expect(document.querySelector(`[data-office-desk='${draftThread.threadId}']`)).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens the CEO office window and lists active projects, including a newly added folder project", async () => {
+    const pickFolder = vi.fn().mockResolvedValue("/repo/gamma");
+    const dispatchCommand = vi.fn().mockImplementation(async (command: { type: string; projectId: string; title: string; workspaceRoot: string }) => {
+      if (command.type === "project.create") {
+        useStore.setState((state) => ({
+          ...state,
+          projects: [
+            ...state.projects,
+            {
+              id: ProjectId.makeUnsafe(command.projectId),
+              name: command.title,
+              cwd: command.workspaceRoot,
+              model: "gpt-5-codex",
+              expanded: true,
+              scripts: [],
+            },
+          ],
+        }));
+      }
+    });
+    window.nativeApi = {
+      dialogs: {
+        pickFolder,
+        confirm: vi.fn(),
+      },
+      orchestration: {
+        dispatchCommand,
+      },
+    } as never;
+
+    const mounted = await mountOffice();
+    try {
+      getRequiredElement<HTMLElement>("[data-office-admin-desk='office-admin']").click();
+      await waitForOfficeLayout();
+
+      const adminWindow = getAdminWindow();
+      expect(adminWindow.textContent).toContain("CEO Office");
+      expect(adminWindow.textContent).toContain("alpha");
+      expect(adminWindow.textContent).toContain("beta");
+
+      getButtonByText("Open Folder").click();
+      await waitForOfficeLayout();
+      await waitForOfficeLayout();
+
+      expect(pickFolder).toHaveBeenCalledOnce();
+      expect(dispatchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "project.create",
+          workspaceRoot: "/repo/gamma",
+        }),
+      );
+      expect(getAdminWindow().textContent).toContain("gamma");
     } finally {
       await mounted.cleanup();
     }

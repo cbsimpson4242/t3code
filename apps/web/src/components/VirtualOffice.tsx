@@ -14,31 +14,56 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "./ui/button";
 import OfficeAgentCreateDialog from "./OfficeAgentCreateDialog";
+import OfficeAdminWindow from "./OfficeAdminWindow";
 import OfficeThreadWindow, {
   buildDefaultOfficeThreadWindowRect,
   normalizeOfficeThreadWindowRect,
   type OfficeThreadWindowRect,
 } from "./OfficeThreadWindow";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuTrigger,
+} from "./ui/menu";
 import { useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
+import { ensureProjectExists, findMostRecentThreadIdForProject } from "../lib/projectLifecycle";
 import {
   createOrReuseProjectDraftThread,
   deleteThreadWithCleanup,
   renameThread,
 } from "../lib/threadLifecycle";
 import { mergeThreadsWithDrafts } from "../lib/threadDrafts";
+import { readNativeApi } from "../nativeApi";
+import { deriveWorkLogEntries } from "../session-logic";
 import { useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
+import type { Thread } from "../types";
 import {
   COFFEE_BAR_SNACK_IDS,
   DESK_HEIGHT,
   DESK_WIDTH,
+  GROUP_DESK_LAYOUT_LEFT_PADDING,
+  GROUP_DESK_LAYOUT_TOP_PADDING,
+  GROUP_FRAME_BOTTOM_PADDING,
+  GROUP_FRAME_SIDE_PADDING,
+  GROUP_FRAME_TOP_PADDING,
+  GROUP_MIN_HEIGHT,
+  GROUP_MIN_WIDTH,
   OFFICE_DRAG_THRESHOLD_PX,
   createDefaultOfficePersistedState,
 } from "../office/officeDefaults";
 import { fitCameraToBounds, screenToWorld, zoomAtPoint } from "../office/officeCamera";
+import { OFFICE_GROUP_ACCENT_OPTIONS, getDefaultOfficeGroupAccent } from "../office/officeColors";
+import {
+  createOfficeFurniture,
+  moveOfficeFurnitureWithChildren,
+  removeOfficeFurniture,
+  type OfficeFurnitureAddKind,
+} from "../office/officeFurniture";
 import { buildOfficeScene, deriveOfficeInputs } from "../office/officeLayout";
 import {
   areOfficePersistedStatesEqual,
@@ -51,20 +76,8 @@ import type {
   OfficeElement,
   OfficePersistedState,
   OfficePoint,
+  OfficeSize,
 } from "../office/officeTypes";
-
-const BOT_COLORS = [
-  { text: "text-violet-500", bg: "bg-violet-500", ring: "ring-violet-400/60", border: "border-violet-400" },
-  { text: "text-blue-500", bg: "bg-blue-500", ring: "ring-blue-400/60", border: "border-blue-400" },
-  { text: "text-emerald-500", bg: "bg-emerald-500", ring: "ring-emerald-400/60", border: "border-emerald-400" },
-  { text: "text-amber-500", bg: "bg-amber-500", ring: "ring-amber-400/60", border: "border-amber-400" },
-  { text: "text-rose-500", bg: "bg-rose-500", ring: "ring-rose-400/60", border: "border-rose-400" },
-  { text: "text-cyan-500", bg: "bg-cyan-500", ring: "ring-cyan-400/60", border: "border-cyan-400" },
-  { text: "text-orange-500", bg: "bg-orange-500", ring: "ring-orange-400/60", border: "border-orange-400" },
-  { text: "text-pink-500", bg: "bg-pink-500", ring: "ring-pink-400/60", border: "border-pink-400" },
-  { text: "text-teal-500", bg: "bg-teal-500", ring: "ring-teal-400/60", border: "border-teal-400" },
-  { text: "text-indigo-500", bg: "bg-indigo-500", ring: "ring-indigo-400/60", border: "border-indigo-400" },
-] as const;
 
 const THOUGHT_EMOJIS = ["\u2615", "\ud83d\udca4", "\ud83d\udca1", "\ud83c\udf3f", "\ud83c\udfb5", "\ud83d\ude80", "\ud83d\udcda", "\u2728"];
 const IDLE_POIS = [
@@ -78,6 +91,18 @@ const IDLE_POIS = [
   { x: 800, y: 290 },
   { x: 340, y: 450 },
 ];
+const ADMIN_DESK_WIDTH = 156;
+const ADMIN_DESK_HEIGHT = 120;
+const ADMIN_WINDOW_ACCENT = "#f59e0b";
+
+const OFFICE_FURNITURE_LABELS: Record<OfficeFurnitureAddKind, string> = {
+  conferenceSet: "Boardroom set",
+  waterCooler: "Water cooler",
+  conferenceTable: "Table",
+  chair: "Chair",
+  plant: "Plant",
+  coffeeBar: "Coffee bar",
+};
 
 interface BotState {
   x: number;
@@ -104,6 +129,26 @@ type DragState =
       pointerId: number;
       kind: "group";
       key: string;
+      linkedThreadIds: string[];
+      startPointer: OfficePoint;
+      startValue: OfficePoint;
+      lastValue: OfficePoint;
+      moved: boolean;
+    }
+  | {
+      pointerId: number;
+      kind: "groupResize";
+      key: string;
+      linkedThreadIds: string[];
+      startPointer: OfficePoint;
+      startSize: OfficeSize;
+      startMinOffset: OfficePoint;
+      startDeskOffsetsByThreadId: Record<string, OfficePoint>;
+      moved: boolean;
+    }
+  | {
+      pointerId: number;
+      kind: "adminDesk";
       startPointer: OfficePoint;
       startValue: OfficePoint;
       moved: boolean;
@@ -134,6 +179,103 @@ function closestPointOnRect(point: OfficePoint, rect: OfficeThreadWindowRect): O
   return {
     x: Math.min(Math.max(point.x, rect.x), rect.x + rect.width),
     y: Math.min(Math.max(point.y, rect.y), rect.y + rect.height),
+  };
+}
+
+function truncateOfficeThought(text: string, maxLength = 84) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}...`;
+}
+
+function summarizeOfficeThought(thread: Thread) {
+  const latestEntry = deriveWorkLogEntries(
+    thread.activities,
+    thread.latestTurn?.turnId ?? undefined,
+  ).at(-1);
+
+  if (!latestEntry) {
+    return thread.session?.orchestrationStatus === "running" ? "Working..." : null;
+  }
+
+  if (latestEntry.detail) {
+    return truncateOfficeThought(latestEntry.detail);
+  }
+  if (latestEntry.command) {
+    return truncateOfficeThought(`Running ${latestEntry.command}`, 72);
+  }
+  if (latestEntry.changedFiles && latestEntry.changedFiles.length > 0) {
+    return truncateOfficeThought(`Updating ${latestEntry.changedFiles.slice(0, 2).join(", ")}`, 72);
+  }
+  return truncateOfficeThought(latestEntry.label);
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function clampGroupSize(size: OfficeSize): OfficeSize {
+  return {
+    width: Math.max(GROUP_MIN_WIDTH, Math.round(size.width)),
+    height: Math.max(GROUP_MIN_HEIGHT, Math.round(size.height)),
+  };
+}
+
+function maxDeskOffsetXForGroupSize(groupSize: OfficeSize, minOffsetX: number) {
+  return Math.max(
+    minOffsetX,
+    groupSize.width - DESK_WIDTH - GROUP_FRAME_SIDE_PADDING * 2 + minOffsetX,
+  );
+}
+
+function maxDeskOffsetYForGroupSize(groupSize: OfficeSize, minOffsetY: number) {
+  return Math.max(
+    minOffsetY,
+    groupSize.height -
+      DESK_HEIGHT -
+      GROUP_FRAME_TOP_PADDING -
+      GROUP_FRAME_BOTTOM_PADDING +
+      minOffsetY,
+  );
+}
+
+function scaleDeskOffsetAxis(
+  value: number,
+  startMin: number,
+  startMax: number,
+  nextMin: number,
+  nextMax: number,
+) {
+  if (startMax <= startMin || nextMax <= nextMin) {
+    return Math.round(clamp(value, nextMin, nextMax));
+  }
+  const ratio = clamp((value - startMin) / (startMax - startMin), 0, 1);
+  return Math.round(nextMin + ratio * (nextMax - nextMin));
+}
+
+function scaleDeskOffsetForGroupResize(
+  offset: OfficePoint,
+  startSize: OfficeSize,
+  nextSize: OfficeSize,
+  startMinOffset: OfficePoint,
+): OfficePoint {
+  return {
+    x: scaleDeskOffsetAxis(
+      offset.x,
+      startMinOffset.x,
+      maxDeskOffsetXForGroupSize(startSize, startMinOffset.x),
+      startMinOffset.x,
+      maxDeskOffsetXForGroupSize(nextSize, startMinOffset.x),
+    ),
+    y: scaleDeskOffsetAxis(
+      offset.y,
+      startMinOffset.y,
+      maxDeskOffsetYForGroupSize(startSize, startMinOffset.y),
+      startMinOffset.y,
+      maxDeskOffsetYForGroupSize(nextSize, startMinOffset.y),
+    ),
   };
 }
 
@@ -196,6 +338,16 @@ function tryReleasePointerCapture(element: HTMLDivElement, pointerId: number) {
   }
 }
 
+function isKeyboardEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  if (target.isContentEditable) {
+    return true;
+  }
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+}
+
 function ProjectOfficeIcon({ cwd }: { cwd: string | null }) {
   const [status, setStatus] = useState<"loading" | "loaded" | "error">(cwd ? "loading" : "error");
 
@@ -216,18 +368,23 @@ function ProjectOfficeIcon({ cwd }: { cwd: string | null }) {
 
 function FurnitureNode(props: {
   element: OfficeElement;
+  isSelected: boolean;
   onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
   onPointerMove: (event: React.PointerEvent<HTMLDivElement>) => void;
   onPointerUp: (event: React.PointerEvent<HTMLDivElement>) => void;
   onPointerCancel: (event: React.PointerEvent<HTMLDivElement>) => void;
 }) {
   const { element } = props;
+  const selectedClassName = props.isSelected
+    ? "ring-2 ring-primary/70 ring-offset-2 ring-offset-background"
+    : "";
 
   if (element.type === "waterCooler") {
     return (
       <div
         data-office-element={element.id}
-        className="absolute flex cursor-grab flex-col items-center active:cursor-grabbing"
+        data-office-element-selected={props.isSelected ? "true" : undefined}
+        className={`absolute flex cursor-grab flex-col items-center rounded-lg active:cursor-grabbing ${selectedClassName}`}
         style={{ left: element.x, top: element.y, width: element.width, height: element.height }}
         onPointerDown={props.onPointerDown}
         onPointerMove={props.onPointerMove}
@@ -252,7 +409,8 @@ function FurnitureNode(props: {
     return (
       <div
         data-office-element={element.id}
-        className="absolute cursor-grab active:cursor-grabbing"
+        data-office-element-selected={props.isSelected ? "true" : undefined}
+        className={`absolute cursor-grab rounded-full active:cursor-grabbing ${selectedClassName}`}
         style={{ left: element.x, top: element.y, width: element.width, height: element.height }}
         onPointerDown={props.onPointerDown}
         onPointerMove={props.onPointerMove}
@@ -271,7 +429,8 @@ function FurnitureNode(props: {
     return (
       <div
         data-office-element={element.id}
-        className="absolute cursor-grab rounded-full border border-slate-500/20 bg-slate-600/20 active:cursor-grabbing"
+        data-office-element-selected={props.isSelected ? "true" : undefined}
+        className={`absolute cursor-grab rounded-full border border-slate-500/20 bg-slate-600/20 active:cursor-grabbing ${selectedClassName}`}
         style={{ left: element.x, top: element.y, width: element.width, height: element.height }}
         onPointerDown={props.onPointerDown}
         onPointerMove={props.onPointerMove}
@@ -285,7 +444,8 @@ function FurnitureNode(props: {
     return (
       <div
         data-office-element={element.id}
-        className="absolute flex cursor-grab flex-col items-center active:cursor-grabbing"
+        data-office-element-selected={props.isSelected ? "true" : undefined}
+        className={`absolute flex cursor-grab flex-col items-center rounded-lg active:cursor-grabbing ${selectedClassName}`}
         style={{ left: element.x, top: element.y, width: element.width, height: element.height }}
         onPointerDown={props.onPointerDown}
         onPointerMove={props.onPointerMove}
@@ -305,7 +465,8 @@ function FurnitureNode(props: {
   return (
     <div
       data-office-element={element.id}
-      className="absolute cursor-grab active:cursor-grabbing"
+      data-office-element-selected={props.isSelected ? "true" : undefined}
+      className={`absolute cursor-grab rounded-lg active:cursor-grabbing ${selectedClassName}`}
       style={{ left: element.x, top: element.y, width: element.width, height: element.height }}
       onPointerDown={props.onPointerDown}
       onPointerMove={props.onPointerMove}
@@ -359,8 +520,11 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
   const [hoveredBotId, setHoveredBotId] = useState<string | null>(null);
   const [isInteracting, setIsInteracting] = useState(false);
   const [openWindows, setOpenWindows] = useState<OpenOfficeThreadWindow[]>([]);
+  const [adminWindowRect, setAdminWindowRect] = useState<OfficeThreadWindowRect | null>(null);
+  const [isAdminWindowFocused, setIsAdminWindowFocused] = useState(false);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [createDialogProjectId, setCreateDialogProjectId] = useState<ProjectId | null>(null);
+  const [selectedFurnitureId, setSelectedFurnitureId] = useState<string | null>(null);
   const shouldFitCameraRef = useRef(initialPersistedState === null);
   const camera = officeState.camera;
 
@@ -375,7 +539,10 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
       }),
     [draftThreadsByThreadId, projects, threads],
   );
-  const officeInputs = useMemo(() => deriveOfficeInputs(projects, mergedThreads), [mergedThreads, projects]);
+  const officeInputs = useMemo(
+    () => deriveOfficeInputs(projects, mergedThreads, officeState.groupAccentColorsByKey),
+    [mergedThreads, officeState.groupAccentColorsByKey, projects],
+  );
   const { scene, persistedState: normalizedPersistedState } = useMemo(
     () =>
       buildOfficeScene({
@@ -384,6 +551,10 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
         persistedState: officeState,
       }),
     [officeInputs, officeState],
+  );
+  const selectedFurniture = useMemo(
+    () => scene.furniture.find((element) => element.id === selectedFurnitureId) ?? null,
+    [scene.furniture, selectedFurnitureId],
   );
 
   useEffect(() => {
@@ -398,6 +569,12 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
     }
     setOfficeState(normalizedPersistedState);
   }, [normalizedPersistedState, officeState]);
+
+  useEffect(() => {
+    if (selectedFurnitureId && !scene.furniture.some((element) => element.id === selectedFurnitureId)) {
+      setSelectedFurnitureId(null);
+    }
+  }, [scene.furniture, selectedFurnitureId]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -430,6 +607,30 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
       }),
     }));
   }, [scene.bounds, viewportSize]);
+
+  const setGroupAccentColor = useCallback((groupKey: string, accentColor: string | null) => {
+    setOfficeState((current) => {
+      const currentAccentColor = current.groupAccentColorsByKey[groupKey];
+      if (accentColor === null && currentAccentColor === undefined) {
+        return current;
+      }
+      if (accentColor !== null && currentAccentColor === accentColor) {
+        return current;
+      }
+
+      const nextGroupAccentColorsByKey = { ...current.groupAccentColorsByKey };
+      if (accentColor === null) {
+        delete nextGroupAccentColorsByKey[groupKey];
+      } else {
+        nextGroupAccentColorsByKey[groupKey] = accentColor;
+      }
+
+      return {
+        ...current,
+        groupAccentColorsByKey: nextGroupAccentColorsByKey,
+      };
+    });
+  }, []);
 
   useEffect(() => {
     const previousViewportSize = previousViewportSizeRef.current;
@@ -531,6 +732,7 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
 
   const openThreadWindow = useCallback(
     (threadId: ThreadId) => {
+      setIsAdminWindowFocused(false);
       setOpenWindows((current) => {
         const existing = current.find((entry) => entry.threadId === threadId);
         if (existing) {
@@ -571,6 +773,7 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
   }, []);
 
   const focusThreadWindow = useCallback((threadId: ThreadId) => {
+    setIsAdminWindowFocused(false);
     setOpenWindows((current) => {
       const existing = current.find((entry) => entry.threadId === threadId);
       if (!existing || current[current.length - 1]?.threadId === threadId) {
@@ -588,6 +791,33 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
           : entry,
       ),
     );
+  }, []);
+
+  const openAdminWindow = useCallback(() => {
+    setIsAdminWindowFocused(true);
+      setAdminWindowRect((current) =>
+        current ??
+        buildDefaultOfficeThreadWindowRect(
+          {
+            x: officeState.adminDeskPosition.x + ADMIN_DESK_WIDTH,
+            y: officeState.adminDeskPosition.y + 32,
+          },
+          0,
+        ),
+      );
+  }, [officeState.adminDeskPosition.x, officeState.adminDeskPosition.y]);
+
+  const closeAdminWindow = useCallback(() => {
+    setAdminWindowRect(null);
+    setIsAdminWindowFocused(false);
+  }, []);
+
+  const focusAdminWindow = useCallback(() => {
+    setIsAdminWindowFocused(true);
+  }, []);
+
+  const updateAdminWindowRect = useCallback((rect: OfficeThreadWindowRect) => {
+    setAdminWindowRect(normalizeOfficeThreadWindowRect(rect));
   }, []);
 
   const openWindowConnections = useMemo(
@@ -613,6 +843,28 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
         ];
       }),
     [deskByThreadId, openWindows],
+  );
+
+  const threadById = useMemo(
+    () => new Map(mergedThreads.map((thread) => [thread.id as string, thread] as const)),
+    [mergedThreads],
+  );
+  const activeThoughtByThreadId = useMemo(
+    () =>
+      new Map(
+        bots.flatMap((bot) => {
+          if (!bot.isActive) {
+            return [];
+          }
+          const thread = threadById.get(bot.threadId);
+          if (!thread) {
+            return [];
+          }
+          const summary = summarizeOfficeThought(thread);
+          return summary ? [[bot.threadId, summary] as const] : [];
+        }),
+      ),
+    [bots, threadById],
   );
 
   useEffect(() => {
@@ -730,6 +982,13 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
 
   const shouldSuppressClick = useCallback(() => performance.now() < suppressClickUntilRef.current, []);
 
+  const handleAdminDeskClick = useCallback(() => {
+    if (shouldSuppressClick()) {
+      return;
+    }
+    openAdminWindow();
+  }, [openAdminWindow, shouldSuppressClick]);
+
   const handleThreadClick = useCallback(
     (threadId: ThreadId) => {
       if (shouldSuppressClick()) {
@@ -763,6 +1022,48 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
     },
     [getDraftThread, getDraftThreadByProjectId, openThreadWindow, setDraftThreadContext, setProjectDraftThreadId],
   );
+
+  const handleCreateAgentForProject = useCallback(
+    async (projectId: ProjectId) => {
+      await handleCreateAgent({
+        projectId,
+        title: null,
+      });
+    },
+    [handleCreateAgent],
+  );
+
+  const handleOpenLatestProjectThread = useCallback(
+    (projectId: ProjectId) => {
+      const latestThreadId = findMostRecentThreadIdForProject(mergedThreads, projectId);
+      if (!latestThreadId) {
+        void handleCreateAgentForProject(projectId);
+        return;
+      }
+      openThreadWindow(latestThreadId);
+    },
+    [handleCreateAgentForProject, mergedThreads, openThreadWindow],
+  );
+
+  const handleAddProjectFromOffice = useCallback(
+    async (rawCwd: string) => {
+      const result = await ensureProjectExists(projects, rawCwd);
+      if (result.status === "existing") {
+        handleOpenLatestProjectThread(result.projectId);
+        return;
+      }
+      await handleCreateAgentForProject(result.projectId);
+    },
+    [handleCreateAgentForProject, handleOpenLatestProjectThread, projects],
+  );
+
+  const handlePickProjectFolder = useCallback(async () => {
+    const api = readNativeApi();
+    if (!api) {
+      return null;
+    }
+    return api.dialogs.pickFolder();
+  }, []);
 
   const handleDeleteThread = useCallback(
     async (threadId: ThreadId) => {
@@ -814,6 +1115,71 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
     [getDraftThread, setDraftThreadContext, threads],
   );
 
+  const getViewportCenterWorldPoint = useCallback((): OfficePoint => {
+    if (viewportSize.width > 0 && viewportSize.height > 0) {
+      return screenToWorld(
+        {
+          x: viewportSize.width / 2,
+          y: viewportSize.height / 2,
+        },
+        camera,
+      );
+    }
+
+    return {
+      x: (scene.bounds.minX + scene.bounds.maxX) / 2,
+      y: (scene.bounds.minY + scene.bounds.maxY) / 2,
+    };
+  }, [camera, scene.bounds, viewportSize]);
+
+  const handleAddFurniture = useCallback(
+    (kind: OfficeFurnitureAddKind) => {
+      const anchor = getViewportCenterWorldPoint();
+      const currentState = stateRef.current ?? officeState;
+      const addedFurniture = createOfficeFurniture(kind, anchor, currentState.furniture);
+      setOfficeState({
+        ...currentState,
+        furniture: [...currentState.furniture, ...addedFurniture],
+      });
+      setSelectedFurnitureId(addedFurniture[0]?.id ?? null);
+    },
+    [getViewportCenterWorldPoint, officeState],
+  );
+
+  const handleRemoveSelectedFurniture = useCallback(() => {
+    if (!selectedFurnitureId) {
+      return;
+    }
+    setOfficeState((current) => ({
+      ...current,
+      furniture: removeOfficeFurniture(current.furniture, selectedFurnitureId),
+    }));
+    setSelectedFurnitureId(null);
+  }, [selectedFurnitureId]);
+
+  useEffect(() => {
+    function handleWindowKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Delete" || event.defaultPrevented) {
+        return;
+      }
+      if (!selectedFurnitureId || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+        return;
+      }
+      if (isKeyboardEditableTarget(event.target)) {
+        return;
+      }
+      event.preventDefault();
+      setOfficeState((current) => ({
+        ...current,
+        furniture: removeOfficeFurniture(current.furniture, selectedFurnitureId),
+      }));
+      setSelectedFurnitureId(null);
+    }
+
+    window.addEventListener("keydown", handleWindowKeyDown);
+    return () => window.removeEventListener("keydown", handleWindowKeyDown);
+  }, [selectedFurnitureId]);
+
   const beginDrag = useCallback(
     (event: React.PointerEvent<HTMLDivElement>, nextDragState: DragState) => {
       if (event.button !== 0) {
@@ -823,6 +1189,7 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
       event.stopPropagation();
       trySetPointerCapture(event.currentTarget, event.pointerId);
       dragStateRef.current = nextDragState;
+      setSelectedFurnitureId(nextDragState.kind === "element" ? nextDragState.key : null);
       setIsInteracting(true);
       setHoveredBotId(null);
       document.body.style.cursor = "grabbing";
@@ -841,6 +1208,14 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
 
   const handleViewportPointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("[data-office-thread-window], [data-office-admin-window], [data-office-toolbar]")) {
+        return;
+      }
+      if (event.button === 0) {
+        setSelectedFurnitureId(null);
+        return;
+      }
       if (event.button !== 1) {
         return;
       }
@@ -916,13 +1291,87 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
       const worldDx = dx / officeState.camera.zoom;
       const worldDy = dy / officeState.camera.zoom;
 
-      setOfficeState((current) => {
-        const nextPoint = {
-          x: Math.round(dragState.startValue.x + worldDx),
-          y: Math.round(dragState.startValue.y + worldDy),
-        };
+      if (dragState.kind === "groupResize") {
+        const nextSize = clampGroupSize({
+          width: dragState.startSize.width + worldDx,
+          height: dragState.startSize.height + worldDy,
+        });
 
-        if (dragState.kind === "group") {
+        setOfficeState((current) => {
+          const currentSize = current.projectGroupSizesByKey[dragState.key] ?? dragState.startSize;
+          const sizeChanged =
+            currentSize.width !== nextSize.width || currentSize.height !== nextSize.height;
+          let deskOffsetsChanged = false;
+          const nextDeskOffsetsByThreadId = { ...current.deskOffsetsByThreadId };
+
+          for (const threadId of dragState.linkedThreadIds) {
+            const startOffset = dragState.startDeskOffsetsByThreadId[threadId];
+            if (!startOffset) {
+              continue;
+            }
+            const nextOffset = scaleDeskOffsetForGroupResize(
+              startOffset,
+              dragState.startSize,
+              nextSize,
+              dragState.startMinOffset,
+            );
+            const currentOffset = current.deskOffsetsByThreadId[threadId] ?? startOffset;
+            if (currentOffset.x === nextOffset.x && currentOffset.y === nextOffset.y) {
+              continue;
+            }
+            nextDeskOffsetsByThreadId[threadId] = nextOffset;
+            deskOffsetsChanged = true;
+          }
+
+          if (!sizeChanged && !deskOffsetsChanged) {
+            return current;
+          }
+
+          return {
+            ...current,
+            projectGroupSizesByKey: {
+              ...current.projectGroupSizesByKey,
+              [dragState.key]: nextSize,
+            },
+            deskOffsetsByThreadId: deskOffsetsChanged
+              ? nextDeskOffsetsByThreadId
+              : current.deskOffsetsByThreadId,
+          };
+        });
+        return;
+      }
+
+      const nextPoint = {
+        x: Math.round(dragState.startValue.x + worldDx),
+        y: Math.round(dragState.startValue.y + worldDy),
+      };
+
+      if (dragState.kind === "group") {
+        const deltaX = nextPoint.x - dragState.lastValue.x;
+        const deltaY = nextPoint.y - dragState.lastValue.y;
+        if (deltaX === 0 && deltaY === 0) {
+          return;
+        }
+        dragState.lastValue = nextPoint;
+
+        if (dragState.linkedThreadIds.length > 0) {
+          setOpenWindows((current) =>
+            current.map((windowState) =>
+              dragState.linkedThreadIds.includes(windowState.threadId)
+                ? {
+                    ...windowState,
+                    rect: {
+                      ...windowState.rect,
+                      x: windowState.rect.x + deltaX,
+                      y: windowState.rect.y + deltaY,
+                    },
+                  }
+                : windowState,
+            ),
+          );
+        }
+
+        setOfficeState((current) => {
           const currentAnchor = current.projectGroupAnchors[dragState.key] ?? dragState.startValue;
           if (currentAnchor.x === nextPoint.x && currentAnchor.y === nextPoint.y) {
             return current;
@@ -933,6 +1382,20 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
               ...current.projectGroupAnchors,
               [dragState.key]: nextPoint,
             },
+          };
+        });
+        return;
+      }
+
+      setOfficeState((current) => {
+        if (dragState.kind === "adminDesk") {
+          const currentPosition = current.adminDeskPosition;
+          if (currentPosition.x === nextPoint.x && currentPosition.y === nextPoint.y) {
+            return current;
+          }
+          return {
+            ...current,
+            adminDeskPosition: nextPoint,
           };
         }
 
@@ -950,16 +1413,22 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
           };
         }
 
-        const currentElement = current.elementsById[dragState.key] ?? dragState.startValue;
-        if (currentElement.x === nextPoint.x && currentElement.y === nextPoint.y) {
+        const movedFurniture = moveOfficeFurnitureWithChildren(current.furniture, dragState.key, nextPoint);
+        const didChange = movedFurniture.some((element, index) => {
+          const previous = current.furniture[index];
+          return (
+            previous?.id !== element.id ||
+            previous.x !== element.x ||
+            previous.y !== element.y ||
+            previous.parentId !== element.parentId
+          );
+        });
+        if (!didChange) {
           return current;
         }
         return {
           ...current,
-          elementsById: {
-            ...current.elementsById,
-            [dragState.key]: nextPoint,
-          },
+          furniture: movedFurniture,
         };
       });
     },
@@ -983,7 +1452,7 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
 
   const handleWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
     const target = event.target instanceof Element ? event.target : null;
-    if (target?.closest("[data-office-thread-window]")) {
+    if (target?.closest("[data-office-thread-window], [data-office-admin-window]")) {
       return;
     }
 
@@ -1011,6 +1480,7 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
     clearOfficePersistedState();
     shouldFitCameraRef.current = true;
     previousViewportSizeRef.current = { width: 0, height: 0 };
+    setSelectedFurnitureId(null);
     setOfficeState(createDefaultOfficePersistedState());
   }, []);
 
@@ -1055,7 +1525,11 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-linear-to-t from-background via-background/70 to-transparent" />
 
       <div className="pointer-events-none absolute left-4 top-4 z-20 flex max-w-[calc(100%-2rem)] items-center gap-2">
-        <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-border/60 bg-background/90 px-2 py-1.5 shadow-lg backdrop-blur-sm">
+        <div
+          data-office-toolbar
+          className="pointer-events-auto flex items-center gap-2 rounded-full border border-border/60 bg-background/90 px-2 py-1.5 shadow-lg backdrop-blur-sm"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
           <div className="rounded-full border border-border/60 bg-card/80 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground/80">
             Office
           </div>
@@ -1063,6 +1537,46 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
             <PlusIcon className="size-4" />
             Create Agent
           </Button>
+          <Menu>
+            <MenuTrigger render={<Button size="sm" variant="ghost" />}>
+              <PlusIcon className="size-4" />
+              Add Furniture
+            </MenuTrigger>
+            <MenuPopup align="start">
+              <MenuItem onClick={() => handleAddFurniture("conferenceSet")}>
+                {OFFICE_FURNITURE_LABELS.conferenceSet}
+              </MenuItem>
+              <MenuItem onClick={() => handleAddFurniture("waterCooler")}>
+                {OFFICE_FURNITURE_LABELS.waterCooler}
+              </MenuItem>
+              <MenuItem onClick={() => handleAddFurniture("plant")}>
+                {OFFICE_FURNITURE_LABELS.plant}
+              </MenuItem>
+              <MenuItem onClick={() => handleAddFurniture("coffeeBar")}>
+                {OFFICE_FURNITURE_LABELS.coffeeBar}
+              </MenuItem>
+              <MenuItem onClick={() => handleAddFurniture("chair")}>
+                {OFFICE_FURNITURE_LABELS.chair}
+              </MenuItem>
+              <MenuItem onClick={() => handleAddFurniture("conferenceTable")}>
+                {OFFICE_FURNITURE_LABELS.conferenceTable}
+              </MenuItem>
+            </MenuPopup>
+          </Menu>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!selectedFurniture}
+            onClick={handleRemoveSelectedFurniture}
+          >
+            Remove Selected
+          </Button>
+          {selectedFurniture && (
+            <div className="rounded-full border border-border/60 bg-background/70 px-2 py-1 text-[11px] font-medium text-muted-foreground">
+              {OFFICE_FURNITURE_LABELS[selectedFurniture.type as keyof typeof OFFICE_FURNITURE_LABELS] ??
+                "Furniture"}
+            </div>
+          )}
           <div className="rounded-full border border-border/60 bg-background/70 px-2 py-1 text-[11px] font-medium">
             <span className="text-muted-foreground">Zoom</span>{" "}
             <span>{Math.round(camera.zoom * 100)}%</span>
@@ -1095,10 +1609,70 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
           transformOrigin: "0 0",
         }}
       >
+        <div
+          data-office-admin-desk="office-admin"
+          className="absolute flex cursor-pointer flex-col items-center"
+          style={{
+            left: officeState.adminDeskPosition.x,
+            top: officeState.adminDeskPosition.y,
+            width: ADMIN_DESK_WIDTH,
+            height: ADMIN_DESK_HEIGHT,
+          }}
+          onPointerDown={(event) =>
+            beginDrag(event, {
+              pointerId: event.pointerId,
+              kind: "adminDesk",
+              startPointer: { x: event.clientX, y: event.clientY },
+              startValue: officeState.adminDeskPosition,
+              moved: false,
+            })
+          }
+          onPointerMove={handleDragPointerMove}
+          onPointerUp={handleDragPointerEnd}
+          onPointerCancel={handleDragPointerEnd}
+          onClick={handleAdminDeskClick}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              handleAdminDeskClick();
+            }
+          }}
+          aria-label="Open CEO office administration window"
+        >
+          <div className="mb-1 rounded-full border border-amber-400/40 bg-background/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-200 shadow-sm">
+            CEO Office
+          </div>
+          <div className="relative flex flex-col items-center">
+            <div className="absolute -top-3 right-[-10px] rounded-full border border-border/70 bg-background/90 px-2 py-0.5 text-[10px] text-muted-foreground shadow-sm">
+              {projects.length} projects
+            </div>
+            <div className="flex h-10 w-14 items-center justify-center rounded-md border border-amber-300/50 bg-amber-900/35 shadow-[0_0_0_1px_rgba(245,158,11,0.16)]">
+              <MonitorIcon className="size-5 text-amber-200" />
+            </div>
+            <div className="h-1.5 w-1 bg-amber-100/20" />
+            <div className="h-0.5 w-5 rounded bg-amber-100/20" />
+          </div>
+          <div className="mt-1 flex items-center gap-1 rounded-md border border-border/60 bg-background/90 px-2 py-1 text-[10px] text-muted-foreground shadow-sm">
+            <FolderIcon className="size-3 text-foreground/70" />
+            Admin controls
+          </div>
+          <div className="mt-1 h-3 w-24 rounded-sm border-t border-amber-800/40 bg-amber-900/30" />
+          <div className="-mt-px flex w-[84px] justify-between">
+            <div className="h-3 w-1 bg-amber-900/25" />
+            <div className="h-3 w-1 bg-amber-900/25" />
+          </div>
+          <div className="mt-1 h-6 w-10 rounded-t-lg border border-slate-500/20 bg-slate-600/20" />
+        </div>
+
         {scene.groups.map((group) => (
           <div
             key={group.key}
             data-office-group={group.key}
+            data-office-group-accent={group.accentColor}
+            data-office-group-width={Math.round(group.element.width)}
+            data-office-group-height={Math.round(group.element.height)}
             className="absolute rounded-2xl border bg-background/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
             style={{
               left: group.element.x,
@@ -1114,8 +1688,10 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
                 pointerId: event.pointerId,
                 kind: "group",
                 key: group.key,
+                linkedThreadIds: group.deskThreadIds,
                 startPointer: { x: event.clientX, y: event.clientY },
                 startValue: { x: group.anchor.x, y: group.anchor.y },
+                lastValue: { x: group.anchor.x, y: group.anchor.y },
                 moved: false,
               })
             }
@@ -1132,6 +1708,78 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
             >
               <ProjectOfficeIcon cwd={group.cwd} />
               <span>{group.label}</span>
+              <div
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                }}
+              >
+                <Menu>
+                  <MenuTrigger
+                    render={
+                      <button
+                        type="button"
+                        className="inline-flex h-5 items-center gap-1 rounded-full border px-1.5 shadow-sm transition-transform hover:scale-105"
+                        style={{
+                          borderColor: `${group.accentColor}88`,
+                          backgroundColor: `${group.accentColor}24`,
+                          boxShadow: `0 0 0 1px ${group.accentColor}22`,
+                        }}
+                        aria-label={`Change color for ${group.label}`}
+                        data-office-group-color-trigger={group.key}
+                      />
+                    }
+                  >
+                    <span
+                      className="inline-flex size-2.5 rounded-full border border-black/10"
+                      style={{ backgroundColor: group.accentColor }}
+                    />
+                    <span className="text-[10px] font-medium normal-case">Color</span>
+                  </MenuTrigger>
+                  <MenuPopup align="end" sideOffset={8}>
+                  <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Group color</div>
+                  <MenuItem
+                    data-office-group-color-option={`${group.key}:auto`}
+                    onClick={() => {
+                      setGroupAccentColor(group.key, null);
+                    }}
+                  >
+                    <div className="flex w-full items-center gap-2">
+                      <span
+                        className="inline-flex size-3 rounded-full border border-border/70 bg-linear-to-r from-transparent via-foreground/45 to-transparent"
+                        style={{
+                          boxShadow: `0 0 0 1px ${getDefaultOfficeGroupAccent(group.key)}24`,
+                        }}
+                      />
+                      <span>Auto</span>
+                      <span className="ml-auto text-[10px] text-muted-foreground">
+                        {officeState.groupAccentColorsByKey[group.key] ? "" : "Selected"}
+                      </span>
+                    </div>
+                  </MenuItem>
+                  <MenuSeparator />
+                    {OFFICE_GROUP_ACCENT_OPTIONS.map((option) => (
+                      <MenuItem
+                        key={option.accentColor}
+                        data-office-group-color-option={`${group.key}:${option.accentColor}`}
+                        onClick={() => {
+                          setGroupAccentColor(group.key, option.accentColor);
+                        }}
+                      >
+                        <div className="flex w-full items-center gap-2">
+                          <span
+                            className="inline-flex size-3 rounded-full border border-black/10"
+                            style={{ backgroundColor: option.accentColor }}
+                          />
+                          <span>{option.label}</span>
+                          <span className="ml-auto text-[10px] text-muted-foreground">
+                            {officeState.groupAccentColorsByKey[group.key] === option.accentColor ? "Selected" : ""}
+                          </span>
+                        </div>
+                      </MenuItem>
+                    ))}
+                  </MenuPopup>
+                </Menu>
+              </div>
               <button
                 type="button"
                 className="ml-1 inline-flex h-5 items-center gap-1 rounded-full border px-1.5 text-[10px] font-medium normal-case"
@@ -1164,6 +1812,55 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
                 backgroundImage: `linear-gradient(90deg, transparent, ${group.accentColor}80, transparent)`,
               }}
             />
+            <div
+              className="absolute bottom-0 right-0 z-10 h-5 w-5 cursor-nwse-resize rounded-tl-md border-l border-t bg-background/92 shadow-sm"
+              style={{
+                borderColor: `${group.accentColor}66`,
+                boxShadow: `-1px -1px 0 0 ${group.accentColor}20`,
+              }}
+              data-office-group-resize={group.key}
+              onPointerDown={(event) =>
+                (() => {
+                  const startDeskOffsetsByThreadId = Object.fromEntries(
+                    group.deskThreadIds.flatMap((threadId) => {
+                      const deskScene = deskByThreadId.get(threadId);
+                      if (!deskScene) {
+                        return [];
+                      }
+                      const offset =
+                        officeState.deskOffsetsByThreadId[threadId] ?? {
+                          x: deskScene.element.x - group.anchor.x,
+                          y: deskScene.element.y - group.anchor.y,
+                        };
+                      return [[threadId, offset] as const];
+                    }),
+                  );
+                  const startOffsets = Object.values(startDeskOffsetsByThreadId);
+                  return beginDrag(event, {
+                  pointerId: event.pointerId,
+                  kind: "groupResize",
+                  key: group.key,
+                  linkedThreadIds: group.deskThreadIds,
+                  startPointer: { x: event.clientX, y: event.clientY },
+                  startSize: {
+                    width: group.element.width,
+                    height: group.element.height,
+                  },
+                  startMinOffset: {
+                    x: startOffsets.length > 0 ? Math.min(...startOffsets.map((offset) => offset.x)) : GROUP_DESK_LAYOUT_LEFT_PADDING,
+                    y: startOffsets.length > 0 ? Math.min(...startOffsets.map((offset) => offset.y)) : GROUP_DESK_LAYOUT_TOP_PADDING,
+                  },
+                  startDeskOffsetsByThreadId,
+                  moved: false,
+                  });
+                })()
+              }
+            >
+              <div
+                className="absolute bottom-1.5 right-1.5 h-2 w-2 rounded-[2px] border-r border-b"
+                style={{ borderColor: `${group.accentColor}aa` }}
+              />
+            </div>
           </div>
         ))}
 
@@ -1171,6 +1868,7 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
           <FurnitureNode
             key={element.id}
             element={element}
+            isSelected={selectedFurnitureId === element.id}
             onPointerDown={(event) =>
               beginDrag(event, {
                 pointerId: event.pointerId,
@@ -1262,8 +1960,21 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
           const transitionMs = state?.transitionMs ?? 2000;
           const facingLeft = state?.facingLeft ?? false;
           const thoughtEmoji = state?.thoughtEmoji ?? null;
+          const activeThought = activeThoughtByThreadId.get(bot.threadId) ?? null;
           const isHovered = !isInteracting && hoveredBotId === bot.threadId;
-          const color = BOT_COLORS[bot.colorIndex % BOT_COLORS.length]!;
+          const botLabelStyle =
+            facingLeft || bot.isActive
+              ? ({
+                  ...(facingLeft ? { transform: "scaleX(-1)" } : {}),
+                  ...(bot.isActive
+                    ? {
+                        borderColor: `${bot.accentColor}88`,
+                        backgroundColor: `${bot.accentColor}14`,
+                        color: bot.accentColor,
+                      }
+                    : {}),
+                } satisfies React.CSSProperties)
+              : undefined;
 
           return (
             <div
@@ -1310,11 +2021,45 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
                 </div>
               )}
 
-              {bot.isActive && (
-                <div className="absolute -top-5 left-full -ml-1 flex gap-0.5 rounded-lg border border-border/60 bg-background px-2 py-0.5 text-xs shadow">
-                  <span className="inline-block h-1 w-1 rounded-full bg-primary" style={{ animation: "officeTypingDot 1.2s ease-in-out infinite" }} />
-                  <span className="inline-block h-1 w-1 rounded-full bg-primary" style={{ animation: "officeTypingDot 1.2s ease-in-out 0.2s infinite" }} />
-                  <span className="inline-block h-1 w-1 rounded-full bg-primary" style={{ animation: "officeTypingDot 1.2s ease-in-out 0.4s infinite" }} />
+              {bot.isActive && activeThought && (
+                <div
+                  className="absolute bottom-full left-1/2 mb-3 flex w-56 -translate-x-1/2 flex-col items-center"
+                  data-office-bot-thought={bot.threadId}
+                >
+                  <div
+                    className="w-full rounded-2xl border bg-background/95 px-3 py-2 text-[11px] leading-relaxed text-foreground shadow-lg"
+                    style={{
+                      borderColor: `${deskByThreadId.get(bot.threadId)?.accentColor ?? "#94a3b8"}88`,
+                    }}
+                  >
+                    <div className="line-clamp-3">{activeThought}</div>
+                    <div className="mt-1.5 flex items-center gap-1">
+                      <span
+                        className="inline-block h-1.5 w-1.5 rounded-full"
+                        style={{ animation: "officeTypingDot 1.2s ease-in-out infinite", backgroundColor: bot.accentColor }}
+                      />
+                      <span
+                        className="inline-block h-1.5 w-1.5 rounded-full"
+                        style={{
+                          animation: "officeTypingDot 1.2s ease-in-out 0.2s infinite",
+                          backgroundColor: bot.accentColor,
+                        }}
+                      />
+                      <span
+                        className="inline-block h-1.5 w-1.5 rounded-full"
+                        style={{
+                          animation: "officeTypingDot 1.2s ease-in-out 0.4s infinite",
+                          backgroundColor: bot.accentColor,
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div
+                    className="-mt-1 h-3 w-3 rotate-45 border-r border-b bg-background/95"
+                    style={{
+                      borderColor: `${deskByThreadId.get(bot.threadId)?.accentColor ?? "#94a3b8"}88`,
+                    }}
+                  />
                 </div>
               )}
 
@@ -1334,16 +2079,36 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
               >
                 <div
                   className={`relative flex h-7 w-7 items-center justify-center rounded-full shadow-sm ${
-                    bot.isActive
-                      ? `${color.bg}/20 ring-2 ${color.ring} border ${color.border}`
-                      : bot.isError
-                        ? "border border-red-400 bg-red-500/20 ring-2 ring-red-400/60"
-                        : `${color.bg}/15 border ${color.border}/50 opacity-80`
+                    bot.isError ? "border border-red-400 bg-red-500/20 ring-2 ring-red-400/60" : "border"
                   }`}
+                  style={
+                    bot.isError
+                      ? undefined
+                      : bot.isActive
+                        ? {
+                            backgroundColor: `${bot.accentColor}22`,
+                            borderColor: `${bot.accentColor}aa`,
+                            boxShadow: `0 0 0 2px ${bot.accentColor}55`,
+                          }
+                        : {
+                            backgroundColor: `${bot.accentColor}18`,
+                            borderColor: `${bot.accentColor}66`,
+                            opacity: 0.8,
+                          }
+                  }
                 >
                   <BotIcon
-                    className={`size-4 ${bot.isActive ? color.text : bot.isError ? "text-destructive" : color.text}`}
-                    style={bot.isActive ? { animation: "officeTyping 1s ease-in-out infinite" } : undefined}
+                    className={`size-4 ${bot.isError ? "text-destructive" : ""}`}
+                    style={
+                      bot.isError
+                        ? bot.isActive
+                          ? { animation: "officeTyping 1s ease-in-out infinite" }
+                          : undefined
+                        : {
+                            color: bot.accentColor,
+                            ...(bot.isActive ? { animation: "officeTyping 1s ease-in-out infinite" } : {}),
+                          }
+                    }
                   />
                   {bot.isActive && (
                     <span className="absolute -right-0.5 -top-0.5 flex h-2 w-2">
@@ -1353,23 +2118,31 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
                   )}
                 </div>
                 <div
-                  className={`-mt-1 h-3 w-5 rounded-b-lg ${
-                    bot.isActive
-                      ? `${color.bg}/25 border-x border-b ${color.border}/50`
-                      : bot.isError
-                        ? "border-x border-b border-red-400/30 bg-red-500/15"
-                        : `${color.bg}/10 border-x border-b ${color.border}/30 opacity-80`
-                  }`}
+                  className={`-mt-1 h-3 w-5 rounded-b-lg ${bot.isError ? "border-x border-b border-red-400/30 bg-red-500/15" : "border-x border-b"}`}
+                  style={
+                    bot.isError
+                      ? undefined
+                      : bot.isActive
+                        ? {
+                            backgroundColor: `${bot.accentColor}28`,
+                            borderColor: `${bot.accentColor}77`,
+                          }
+                        : {
+                            backgroundColor: `${bot.accentColor}14`,
+                            borderColor: `${bot.accentColor}44`,
+                            opacity: 0.8,
+                          }
+                  }
                 />
               </div>
 
               <div
                 className={`mt-0.5 rounded border px-1.5 py-0.5 font-mono text-[9px] whitespace-nowrap shadow-sm transition-opacity ${
                   bot.isActive
-                    ? "border-primary/50 bg-background/90 font-bold text-primary opacity-100"
+                    ? "bg-background/90 font-bold opacity-100"
                     : "border-border/50 bg-background/90 text-muted-foreground opacity-0 group-hover:opacity-100"
                 }`}
-                style={facingLeft ? { transform: "scaleX(-1)" } : undefined}
+                style={botLabelStyle}
               >
                 {bot.title.slice(0, 15)}
                 {bot.title.length > 15 ? "..." : ""}
@@ -1378,8 +2151,11 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
           );
         })}
 
-        <div className="pointer-events-none absolute inset-0">
-          <svg className="h-full w-full overflow-visible">
+        <svg
+          className="pointer-events-none absolute left-0 top-0 overflow-visible"
+          width={1}
+          height={1}
+        >
             {openWindowConnections.map((connection) => (
               <g key={connection.threadId} data-office-thread-link={connection.threadId}>
                 <line
@@ -1409,8 +2185,7 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
                 />
               </g>
             ))}
-          </svg>
-        </div>
+        </svg>
 
         {openWindows.map((windowState, index) => {
           const desk = deskByThreadId.get(windowState.threadId);
@@ -1438,6 +2213,25 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
             />
           );
         })}
+
+        {adminWindowRect ? (
+          <OfficeAdminWindow
+            rect={adminWindowRect}
+            zoom={camera.zoom}
+            zIndex={isAdminWindowFocused ? 20_000 + openWindows.length + 1 : 19_999}
+            isFocused={isAdminWindowFocused}
+            accentColor={ADMIN_WINDOW_ACCENT}
+            projects={projects}
+            threads={mergedThreads}
+            onClose={closeAdminWindow}
+            onFocus={focusAdminWindow}
+            onRectChange={updateAdminWindowRect}
+            onAddProject={handleAddProjectFromOffice}
+            onPickFolder={handlePickProjectFolder}
+            onOpenLatestThread={handleOpenLatestProjectThread}
+            onCreateAgent={handleCreateAgentForProject}
+          />
+        ) : null}
       </div>
       <OfficeAgentCreateDialog
         open={isCreateDialogOpen}

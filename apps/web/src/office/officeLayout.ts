@@ -1,7 +1,6 @@
 import type { Project, Thread } from "../types";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import {
-  DEFAULT_FURNITURE_ELEMENTS,
   DEFAULT_GROUP_APPEND_STEP,
   DEFAULT_GROUP_START,
   DESK_BOT_TARGET,
@@ -13,6 +12,7 @@ import {
   GROUP_MIN_HEIGHT,
   GROUP_MIN_WIDTH,
 } from "./officeDefaults";
+import { resolveOfficeGroupAccent } from "./officeColors";
 import type {
   OfficeDeskInput,
   OfficeDeskScene,
@@ -23,6 +23,7 @@ import type {
   OfficeProjectGroupScene,
   OfficeSceneBounds,
   OfficeSceneBuildResult,
+  OfficeSize,
 } from "./officeTypes";
 
 function getPathLeaf(path: string | null | undefined) {
@@ -73,6 +74,13 @@ function nextGroupAnchor(existingAnchors: OfficePoint[]): OfficePoint {
   };
 }
 
+function clampGroupFrameSize(size: OfficeSize): OfficeSize {
+  return {
+    width: Math.max(GROUP_MIN_WIDTH, Math.round(size.width)),
+    height: Math.max(GROUP_MIN_HEIGHT, Math.round(size.height)),
+  };
+}
+
 function deskSlotCandidates(): OfficePoint[] {
   const candidates: OfficePoint[] = [];
   for (let row = 0; row < 10; row += 1) {
@@ -109,34 +117,10 @@ function nextDeskOffset(existingOffsets: OfficePoint[]): OfficePoint {
   };
 }
 
-const OFFICE_GROUP_ACCENTS = [
-  "#fb7185",
-  "#f59e0b",
-  "#22c55e",
-  "#06b6d4",
-  "#3b82f6",
-  "#8b5cf6",
-  "#ec4899",
-  "#14b8a6",
-  "#f97316",
-  "#84cc16",
-] as const;
-
-function hashString(value: string): number {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
-  }
-  return hash;
-}
-
-function accentColorForGroupKey(groupKey: string): string {
-  return OFFICE_GROUP_ACCENTS[hashString(groupKey) % OFFICE_GROUP_ACCENTS.length]!;
-}
-
 export function deriveOfficeInputs(
   projects: Project[],
   threads: Thread[],
+  groupAccentColorsByKey: Record<string, string> = {},
 ): { groups: OfficeProjectGroupInput[]; desks: OfficeDeskInput[] } {
   const projectById = new Map(projects.map((project) => [project.id, project] as const));
   const groupedThreads = new Map<
@@ -186,7 +170,7 @@ export function deriveOfficeInputs(
         title: thread.title,
         model: thread.model,
         groupKey: group.key,
-        accentColor: accentColorForGroupKey(group.key),
+        accentColor: resolveOfficeGroupAccent(group.key, groupAccentColorsByKey),
         isActive:
           thread.session?.status === "running" ||
           thread.session?.orchestrationStatus === "running" ||
@@ -217,6 +201,7 @@ export function buildOfficeScene(input: {
   }
 
   const nextProjectGroupAnchors: Record<string, OfficePoint> = {};
+  const nextProjectGroupSizesByKey: Record<string, OfficeSize> = {};
   for (const group of input.groups) {
     const anchor = input.persistedState.projectGroupAnchors[group.key];
     if (anchor) {
@@ -293,12 +278,18 @@ export function buildOfficeScene(input: {
         GROUP_FRAME_BOTTOM_PADDING -
         Math.min(-GROUP_FRAME_TOP_PADDING, minLocalY - GROUP_FRAME_TOP_PADDING),
     );
+    const persistedGroupSize = input.persistedState.projectGroupSizesByKey[group.key];
+    const resolvedFrameSize = clampGroupFrameSize({
+      width: Math.max(frameWidth, persistedGroupSize?.width ?? 0),
+      height: Math.max(frameHeight, persistedGroupSize?.height ?? 0),
+    });
+    nextProjectGroupSizesByKey[group.key] = resolvedFrameSize;
 
     groupScenes.push({
       key: group.key,
       label: group.label,
       cwd: group.cwd,
-      accentColor: accentColorForGroupKey(group.key),
+      accentColor: resolveOfficeGroupAccent(group.key, input.persistedState.groupAccentColorsByKey),
       anchor: {
         key: group.key,
         x: anchor.x,
@@ -309,8 +300,8 @@ export function buildOfficeScene(input: {
         type: "projectGroup",
         x: frameLeft,
         y: frameTop,
-        width: frameWidth,
-        height: frameHeight,
+        width: resolvedFrameSize.width,
+        height: resolvedFrameSize.height,
         draggable: true,
         metadata: {
           groupKey: group.key,
@@ -322,16 +313,12 @@ export function buildOfficeScene(input: {
     });
   }
 
-  const nextElementsById: Record<string, OfficePoint> = {};
-  const furniture = DEFAULT_FURNITURE_ELEMENTS.map((element) => {
-    const persistedPosition = input.persistedState.elementsById[element.id];
-    const position = persistedPosition ?? { x: element.x, y: element.y };
-    nextElementsById[element.id] = position;
+  const furniture = input.persistedState.furniture.map((element) => {
     const nextElement: OfficeElement = {
       id: element.id,
       type: element.type,
-      x: position.x,
-      y: position.y,
+      x: element.x,
+      y: element.y,
       width: element.width,
       height: element.height,
       draggable: element.draggable,
@@ -340,7 +327,7 @@ export function buildOfficeScene(input: {
       nextElement.parentId = element.parentId;
     }
     if (element.metadata) {
-      nextElement.metadata = element.metadata;
+      nextElement.metadata = { ...element.metadata };
     }
     return nextElement;
   });
@@ -353,11 +340,14 @@ export function buildOfficeScene(input: {
 
   return {
     persistedState: {
-      version: 1,
+      version: 2,
       camera: input.persistedState.camera,
-      elementsById: nextElementsById,
+      furniture,
       projectGroupAnchors: nextProjectGroupAnchors,
+      projectGroupSizesByKey: nextProjectGroupSizesByKey,
       deskOffsetsByThreadId: nextDeskOffsetsByThreadId,
+      groupAccentColorsByKey: { ...input.persistedState.groupAccentColorsByKey },
+      adminDeskPosition: { ...input.persistedState.adminDeskPosition },
     },
     scene: {
       groups: groupScenes,
