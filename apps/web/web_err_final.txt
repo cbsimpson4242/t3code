@@ -1,0 +1,3 @@
+﻿src/components/SourceControlPanel.tsx(20,15): error TS2305: Module '"@t3tools/contracts"' has no exported member 'GitFileStatusCode'.
+src/components/SourceControlPanel.tsx(80,58): error TS2339: Property 'setSourceControlOpen' does not exist on type 'AppStore'.
+src/components/SourceControlPanel.tsx(254,36): error TS2339: Property 'statusCode' does not exist on type '{ readonly path: string; readonly insertions: number; readonly deletions: number; }'.

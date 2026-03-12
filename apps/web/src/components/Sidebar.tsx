@@ -45,7 +45,11 @@ import { isChatNewLocalShortcut, isChatNewShortcut, shortcutLabelForCommand } fr
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { gitRemoveWorktreeMutationOptions, gitStatusQueryOptions } from "../lib/gitReactQuery";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
-import { createOrReuseProjectDraftThread, deleteThreadWithCleanup } from "../lib/threadLifecycle";
+import {
+  createOrReuseProjectDraftThread,
+  deleteThreadWithCleanup,
+  renameThread,
+} from "../lib/threadLifecycle";
 import { readNativeApi } from "../nativeApi";
 import { type DraftThreadEnvMode, useComposerDraftStore } from "../composerDraftStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
@@ -553,7 +557,7 @@ export default function Sidebar() {
   }, []);
 
   const commitRename = useCallback(
-    async (threadId: ThreadId, newTitle: string, originalTitle: string) => {
+    async (threadId: ThreadId, newTitle: string) => {
       const finishRename = () => {
         setRenamingThreadId((current) => {
           if (current !== threadId) return current;
@@ -562,38 +566,20 @@ export default function Sidebar() {
         });
       };
 
-      const trimmed = newTitle.trim();
-      if (trimmed.length === 0) {
-        toastManager.add({ type: "warning", title: "Thread title cannot be empty" });
-        finishRename();
-        return;
-      }
-      if (trimmed === originalTitle) {
-        finishRename();
-        return;
-      }
-      const api = readNativeApi();
-      if (!api) {
-        finishRename();
-        return;
-      }
-      try {
-        await api.orchestration.dispatchCommand({
-          type: "thread.meta.update",
-          commandId: newCommandId(),
+      await renameThread(
+        {
+          threads,
+          getDraftThread,
+          setDraftThreadContext,
+        },
+        {
           threadId,
-          title: trimmed,
-        });
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Failed to rename thread",
-          description: error instanceof Error ? error.message : "An error occurred.",
-        });
-      }
+          title: newTitle,
+        },
+      );
       finishRename();
     },
-    [],
+    [getDraftThread, setDraftThreadContext, threads],
   );
 
   const handleThreadContextMenu = useCallback(
@@ -1345,7 +1331,7 @@ export default function Sidebar() {
                                                 if (e.key === "Enter") {
                                                   e.preventDefault();
                                                   renamingCommittedRef.current = true;
-                                                  void commitRename(thread.id, renamingTitle, thread.title);
+                                                  void commitRename(thread.id, renamingTitle);
                                                 } else if (e.key === "Escape") {
                                                   e.preventDefault();
                                                   renamingCommittedRef.current = true;
@@ -1354,7 +1340,7 @@ export default function Sidebar() {
                                               }}
                                               onBlur={() => {
                                                 if (!renamingCommittedRef.current) {
-                                                  void commitRename(thread.id, renamingTitle, thread.title);
+                                                  void commitRename(thread.id, renamingTitle);
                                                 }
                                               }}
                                               onClick={(e) => e.stopPropagation()}

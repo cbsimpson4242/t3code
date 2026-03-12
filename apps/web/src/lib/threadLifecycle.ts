@@ -6,6 +6,7 @@ import { type Project, type Thread } from "~/types";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "~/worktreeCleanup";
 import { toastManager } from "~/components/ui/toast";
 import { newCommandId, newThreadId } from "~/lib/utils";
+import { draftThreadTitle } from "~/lib/threadDrafts";
 
 export interface CreateOrReuseProjectDraftThreadDependencies {
   getDraftThreadByProjectId: (projectId: ProjectId) => (DraftThreadState & { threadId: ThreadId }) | null;
@@ -104,6 +105,73 @@ export interface DeleteThreadWithCleanupDependencies {
   clearTerminalState: (threadId: ThreadId) => void;
   removeWorktree: (input: { cwd: string; path: string; force: boolean }) => Promise<void>;
   navigateAfterDelete?: (input: { deletedThreadId: ThreadId; fallbackThreadId: ThreadId | null }) => void;
+}
+
+export interface RenameThreadDependencies {
+  threads: Thread[];
+  getDraftThread: (threadId: ThreadId) => DraftThreadState | null;
+  setDraftThreadContext: (
+    threadId: ThreadId,
+    options: {
+      branch?: string | null;
+      worktreePath?: string | null;
+      projectId?: ProjectId;
+      createdAt?: string;
+      envMode?: DraftThreadEnvMode;
+      runtimeMode?: DraftThreadState["runtimeMode"];
+      interactionMode?: DraftThreadState["interactionMode"];
+      title?: string | null;
+    },
+  ) => void;
+}
+
+export async function renameThread(
+  dependencies: RenameThreadDependencies,
+  input: {
+    threadId: ThreadId;
+    title: string;
+  },
+): Promise<{ renamed: boolean }> {
+  const trimmed = input.title.trim();
+  if (trimmed.length === 0) {
+    toastManager.add({ type: "warning", title: "Thread title cannot be empty" });
+    return { renamed: false };
+  }
+
+  const thread = dependencies.threads.find((entry) => entry.id === input.threadId);
+  const draftThread = dependencies.getDraftThread(input.threadId);
+  const currentTitle = thread ? thread.title : draftThread ? draftThreadTitle(draftThread) : null;
+
+  if (currentTitle === null || trimmed === currentTitle) {
+    return { renamed: false };
+  }
+
+  if (!thread) {
+    dependencies.setDraftThreadContext(input.threadId, { title: trimmed });
+    return { renamed: true };
+  }
+
+  const api = readNativeApi();
+  if (!api) {
+    return { renamed: false };
+  }
+
+  try {
+    await api.orchestration.dispatchCommand({
+      type: "thread.meta.update",
+      commandId: newCommandId(),
+      threadId: input.threadId,
+      title: trimmed,
+    });
+    return { renamed: true };
+  } catch (error) {
+    toastManager.add({
+      type: "error",
+      title: "Failed to rename thread",
+      description: error instanceof Error ? error.message : "An error occurred.",
+    });
+    return { renamed: false };
+  }
 }
 
 export async function deleteThreadWithCleanup(

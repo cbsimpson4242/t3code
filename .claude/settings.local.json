@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --version)",
+      "Bash(bun --version)",
+      "Bash(codex --version)",
+      "Bash(npm install -g bun)",
+      "Bash(bunx --version)",
+      "Bash(npm install -g @openai/codex)",
+      "Bash(bun install)",
+      "Bash(bun add \"https://pkg.pr.new/Effect-TS/effect-smol/@effect/platform-node-shared@8881a9b606d84a6f5eb6615279138322984f5368\")",
+      "Bash(timeout 30 bun run dev)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\(''exports'', {}\\), indent=2\\)\\)\")",
+      "Read(//c/Users/chris/.bun/**)",
+      "Read(//c/Users/chris/AppData/Local/**)",
+      "Bash(bun pm cache)",
+      "Bash(curl -s \"https://pkg.pr.new/Effect-TS/effect-smol/@effect/platform-node-shared@8881a9b606d84a6f5eb6615279138322984f5368\" -o /tmp/pns.tgz)",
+      "Read(//tmp/**)",
+      "Bash(npm pack \"https://pkg.pr.new/Effect-TS/effect-smol/@effect/platform-node-shared@8881a9b606d84a6f5eb6615279138322984f5368\" --dry-run)",
+      "Bash(npm pack \"https://pkg.pr.new/Effect-TS/effect-smol/@effect/platform-node-shared@8881a9b606d84a6f5eb6615279138322984f5368\")",
+      "Bash(ls /tmp/effect-platform-node-shared-*.tgz)",
+      "Bash(tar -xzf effect-platform-node-shared-4.0.0-beta.25.tgz)",
+      "Bash(timeout 20 bun run dev)",
+      "Bash(bun run dev:desktop)",
+      "Bash(file /c/Users/chris/AppData/Roaming/npm/node_modules/bun/bin/bun*)",
+      "Bash(bun run build:contracts)",
+      "Bash(bun run typecheck)",
+      "Bash(bun lint)"
+    ]
+  }
+}

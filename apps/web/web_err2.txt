@@ -1,0 +1,7 @@
+﻿
+> @t3tools/web@0.0.9 typecheck
+> tsc --noEmit
+
+src/store.test.ts(37,3): error TS2741: Property 'sourceControlOpen' is missing in type '{ projects: { id: string & Brand<"ProjectId">; name: string; cwd: string; model: string; expanded: true; scripts: never[]; }[]; threads: Thread[]; threadsHydrated: true; }' but required in type 'AppState'.
+src/store.test.ts(156,11): error TS2741: Property 'sourceControlOpen' is missing in type '{ projects: { id: string & Brand<"ProjectId">; name: string; cwd: string; model: "gpt-5.4"; expanded: true; scripts: never[]; }[]; threads: never[]; threadsHydrated: true; }' but required in type 'AppState'.
+src/store.test.ts(211,11): error TS2741: Property 'sourceControlOpen' is missing in type '{ projects: { id: string & Brand<"ProjectId">; name: string; cwd: string; model: "gpt-5.4"; expanded: true; scripts: never[]; }[]; threads: never[]; threadsHydrated: true; }' but required in type 'AppState'.

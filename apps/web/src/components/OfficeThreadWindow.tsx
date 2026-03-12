@@ -2,32 +2,43 @@ import { ArrowUpRightIcon, Trash2Icon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ThreadId } from "@t3tools/contracts";
 
-import { useMediaQuery } from "~/hooks/useMediaQuery";
-import type { Project, Thread } from "~/types";
 import ChatView from "~/components/ChatView";
 import { Button } from "~/components/ui/button";
 import { SidebarProvider } from "~/components/ui/sidebar";
+import type { Project, Thread } from "~/types";
 
-const MOBILE_MEDIA_QUERY = "(max-width: 920px)";
 const WINDOW_MARGIN = 16;
-const DEFAULT_WINDOW_WIDTH = 1100;
-const DEFAULT_WINDOW_HEIGHT = 820;
-const MIN_WINDOW_WIDTH = 720;
-const MIN_WINDOW_HEIGHT = 420;
+const DEFAULT_WINDOW_WIDTH = 920;
+const DEFAULT_WINDOW_HEIGHT = 620;
+const MIN_WINDOW_WIDTH = 420;
+const MIN_WINDOW_HEIGHT = 300;
+const WINDOW_CASCADE_OFFSET = 28;
 
-interface WindowRect {
+export interface OfficeThreadWindowRect {
   x: number;
   y: number;
   width: number;
   height: number;
 }
 
+export interface OfficeThreadWindowViewport {
+  width: number;
+  height: number;
+}
+
 interface OfficeThreadWindowProps {
-  openThreadId: ThreadId | null;
+  threadId: ThreadId;
+  rect: OfficeThreadWindowRect;
+  viewport: OfficeThreadWindowViewport;
+  zIndex: number;
+  isFocused: boolean;
+  accentColor: string;
   projects: Project[];
   threads: Thread[];
   onClose: () => void;
   onDelete: (threadId: ThreadId) => Promise<void> | void;
+  onFocus: () => void;
+  onRectChange: (rect: OfficeThreadWindowRect) => void;
   onOpenInMainWindow?: ((threadId: ThreadId) => void) | undefined;
 }
 
@@ -37,27 +48,29 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function buildDefaultRect(width: number, height: number): WindowRect {
-  const nextWidth = Math.min(DEFAULT_WINDOW_WIDTH, Math.max(MIN_WINDOW_WIDTH, width - WINDOW_MARGIN * 2));
-  const nextHeight = Math.min(
-    DEFAULT_WINDOW_HEIGHT,
-    Math.max(MIN_WINDOW_HEIGHT, height - WINDOW_MARGIN * 2),
-  );
-  return {
-    width: nextWidth,
-    height: nextHeight,
-    x: Math.max(WINDOW_MARGIN, Math.round((width - nextWidth) / 2)),
-    y: Math.max(WINDOW_MARGIN, Math.round((height - nextHeight) / 2)),
-  };
+function rectsEqual(a: OfficeThreadWindowRect, b: OfficeThreadWindowRect) {
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }
 
-function clampRect(rect: WindowRect, viewport: { width: number; height: number }): WindowRect {
-  const width = clamp(rect.width, MIN_WINDOW_WIDTH, Math.max(MIN_WINDOW_WIDTH, viewport.width - WINDOW_MARGIN * 2));
+export function clampOfficeThreadWindowRect(
+  rect: OfficeThreadWindowRect,
+  viewport: OfficeThreadWindowViewport,
+): OfficeThreadWindowRect {
+  const maxWidth = Math.max(280, viewport.width - WINDOW_MARGIN * 2);
+  const maxHeight = Math.max(220, viewport.height - WINDOW_MARGIN * 2);
+  const minWidth = Math.min(MIN_WINDOW_WIDTH, maxWidth);
+  const minHeight = Math.min(MIN_WINDOW_HEIGHT, maxHeight);
+  const width = clamp(
+    rect.width,
+    minWidth,
+    maxWidth,
+  );
   const height = clamp(
     rect.height,
-    MIN_WINDOW_HEIGHT,
-    Math.max(MIN_WINDOW_HEIGHT, viewport.height - WINDOW_MARGIN * 2),
+    minHeight,
+    maxHeight,
   );
+
   return {
     width,
     height,
@@ -66,94 +79,115 @@ function clampRect(rect: WindowRect, viewport: { width: number; height: number }
   };
 }
 
+export function buildDefaultOfficeThreadWindowRect(
+  viewport: OfficeThreadWindowViewport,
+  stackIndex = 0,
+): OfficeThreadWindowRect {
+  const width = Math.min(DEFAULT_WINDOW_WIDTH, Math.max(280, viewport.width - WINDOW_MARGIN * 2));
+  const height = Math.min(DEFAULT_WINDOW_HEIGHT, Math.max(220, viewport.height - WINDOW_MARGIN * 2));
+  const cascadeStep = mod(stackIndex, 6) * WINDOW_CASCADE_OFFSET;
+
+  return clampOfficeThreadWindowRect(
+    {
+      width,
+      height,
+      x: Math.max(WINDOW_MARGIN, Math.round((viewport.width - width) / 2) + cascadeStep),
+      y: Math.max(WINDOW_MARGIN, Math.round((viewport.height - height) / 2) + cascadeStep),
+    },
+    viewport,
+  );
+}
+
+function mod(value: number, divisor: number) {
+  if (divisor === 0) {
+    return 0;
+  }
+  return ((value % divisor) + divisor) % divisor;
+}
+
 export default function OfficeThreadWindow({
-  openThreadId,
+  threadId,
+  rect,
+  viewport,
+  zIndex,
+  isFocused,
+  accentColor,
   projects,
   threads,
   onClose,
   onDelete,
+  onFocus,
+  onRectChange,
   onOpenInMainWindow,
 }: OfficeThreadWindowProps) {
-  const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
   const dragStateRef = useRef<null | {
     pointerId: number;
     startX: number;
     startY: number;
-    startRect: WindowRect;
+    startRect: OfficeThreadWindowRect;
   }>(null);
   const resizeStateRef = useRef<null | {
     pointerId: number;
     startX: number;
     startY: number;
-    startRect: WindowRect;
+    startRect: OfficeThreadWindowRect;
     direction: ResizeDirection;
   }>(null);
-  const [rect, setRect] = useState<WindowRect>(() =>
-    buildDefaultRect(
-      typeof window === "undefined" ? DEFAULT_WINDOW_WIDTH : window.innerWidth,
-      typeof window === "undefined" ? DEFAULT_WINDOW_HEIGHT : window.innerHeight,
-    ),
-  );
   const [isDeleting, setIsDeleting] = useState(false);
-  const thread = useMemo(
-    () => threads.find((entry) => entry.id === openThreadId) ?? null,
-    [openThreadId, threads],
-  );
+  const thread = useMemo(() => threads.find((entry) => entry.id === threadId) ?? null, [threadId, threads]);
   const project = useMemo(
     () => (thread ? projects.find((entry) => entry.id === thread.projectId) ?? null : null),
     [projects, thread],
   );
 
   useEffect(() => {
-    const syncRect = () => {
-      setRect((current) => clampRect(current, { width: window.innerWidth, height: window.innerHeight }));
-    };
-    syncRect();
-    window.addEventListener("resize", syncRect);
-    return () => window.removeEventListener("resize", syncRect);
-  }, []);
+    const clampedRect = clampOfficeThreadWindowRect(rect, viewport);
+    if (!rectsEqual(clampedRect, rect)) {
+      onRectChange(clampedRect);
+    }
+  }, [onRectChange, rect, viewport]);
 
-  useEffect(() => {
-    if (!openThreadId || isMobile) {
-      return;
-    }
-    setRect(buildDefaultRect(window.innerWidth, window.innerHeight));
-  }, [isMobile, openThreadId]);
+  const handleDragPointerMove = useCallback(
+    (event: PointerEvent) => {
+      const dragState = dragStateRef.current;
+      if (!dragState || dragState.pointerId !== event.pointerId) {
+        return;
+      }
+      event.preventDefault();
+      onRectChange(
+        clampOfficeThreadWindowRect(
+          {
+            ...dragState.startRect,
+            x: dragState.startRect.x + (event.clientX - dragState.startX),
+            y: dragState.startRect.y + (event.clientY - dragState.startY),
+          },
+          viewport,
+        ),
+      );
+    },
+    [onRectChange, viewport],
+  );
 
-  const handleDragPointerMove = useCallback((event: PointerEvent) => {
-    const dragState = dragStateRef.current;
-    if (!dragState || dragState.pointerId !== event.pointerId) {
-      return;
-    }
-    event.preventDefault();
-    const nextRect = clampRect(
-      {
-        ...dragState.startRect,
-        x: dragState.startRect.x + (event.clientX - dragState.startX),
-        y: dragState.startRect.y + (event.clientY - dragState.startY),
-      },
-      { width: window.innerWidth, height: window.innerHeight },
-    );
-    setRect(nextRect);
-  }, []);
-
-  const handleResizePointerMove = useCallback((event: PointerEvent) => {
-    const resizeState = resizeStateRef.current;
-    if (!resizeState || resizeState.pointerId !== event.pointerId) {
-      return;
-    }
-    event.preventDefault();
-    const deltaX = event.clientX - resizeState.startX;
-    const deltaY = event.clientY - resizeState.startY;
-    const nextRect = { ...resizeState.startRect };
-    if (resizeState.direction === "right" || resizeState.direction === "corner") {
-      nextRect.width = resizeState.startRect.width + deltaX;
-    }
-    if (resizeState.direction === "bottom" || resizeState.direction === "corner") {
-      nextRect.height = resizeState.startRect.height + deltaY;
-    }
-    setRect(clampRect(nextRect, { width: window.innerWidth, height: window.innerHeight }));
-  }, []);
+  const handleResizePointerMove = useCallback(
+    (event: PointerEvent) => {
+      const resizeState = resizeStateRef.current;
+      if (!resizeState || resizeState.pointerId !== event.pointerId) {
+        return;
+      }
+      event.preventDefault();
+      const deltaX = event.clientX - resizeState.startX;
+      const deltaY = event.clientY - resizeState.startY;
+      const nextRect = { ...resizeState.startRect };
+      if (resizeState.direction === "right" || resizeState.direction === "corner") {
+        nextRect.width = resizeState.startRect.width + deltaX;
+      }
+      if (resizeState.direction === "bottom" || resizeState.direction === "corner") {
+        nextRect.height = resizeState.startRect.height + deltaY;
+      }
+      onRectChange(clampOfficeThreadWindowRect(nextRect, viewport));
+    },
+    [onRectChange, viewport],
+  );
 
   useEffect(() => {
     const handlePointerUp = (event: PointerEvent) => {
@@ -181,14 +215,10 @@ export default function OfficeThreadWindow({
     };
   }, [handleDragPointerMove, handleResizePointerMove]);
 
-  if (!openThreadId) {
-    return null;
-  }
-
   const handleDelete = async () => {
     setIsDeleting(true);
     try {
-      await onDelete(openThreadId);
+      await onDelete(threadId);
     } finally {
       setIsDeleting(false);
     }
@@ -196,25 +226,28 @@ export default function OfficeThreadWindow({
 
   const shell = (
     <div
-      className="pointer-events-auto relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[28px] border border-border/70 bg-background/95 shadow-2xl backdrop-blur-xl"
-      style={
-        isMobile
-          ? undefined
-          : {
-              width: rect.width,
-              height: rect.height,
-            }
-      }
-      data-office-thread-window={openThreadId}
+      className="pointer-events-auto relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[24px] border bg-background/96 shadow-2xl backdrop-blur-xl"
+      style={{
+        borderColor: isFocused ? `${accentColor}aa` : `${accentColor}66`,
+        boxShadow: isFocused
+          ? `0 20px 60px -28px ${accentColor}90, 0 0 0 1px ${accentColor}40`
+          : `0 16px 42px -28px ${accentColor}78, 0 0 0 1px ${accentColor}20`,
+        width: rect.width,
+        height: rect.height,
+      }}
+      data-office-thread-window={threadId}
+      data-office-thread-focused={isFocused}
+      onPointerDownCapture={() => onFocus()}
     >
       <div
-        className={`flex items-center gap-3 border-b border-border/70 bg-card/70 px-4 py-3 ${isMobile ? "" : "cursor-move"}`}
+        className="flex cursor-move items-center gap-3 border-b px-4 py-3"
+        style={{
+          borderColor: `${accentColor}50`,
+          background: `linear-gradient(180deg, ${accentColor}1f, rgba(15, 23, 42, 0.02))`,
+        }}
+        data-office-thread-drag-handle={threadId}
         onPointerDown={(event) => {
-          if (
-            isMobile ||
-            event.button !== 0 ||
-            (event.target instanceof HTMLElement && event.target.closest("button"))
-          ) {
+          if (event.button !== 0 || (event.target instanceof HTMLElement && event.target.closest("button"))) {
             return;
           }
           dragStateRef.current = {
@@ -226,6 +259,11 @@ export default function OfficeThreadWindow({
           document.body.style.userSelect = "none";
         }}
       >
+        <div
+          className="h-8 w-1 shrink-0 rounded-full"
+          style={{ backgroundColor: accentColor }}
+          aria-hidden="true"
+        />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold text-foreground">
             {thread?.title ?? "New thread"}
@@ -235,11 +273,7 @@ export default function OfficeThreadWindow({
           </div>
         </div>
         {onOpenInMainWindow ? (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => onOpenInMainWindow(openThreadId)}
-          >
+          <Button size="sm" variant="outline" onClick={() => onOpenInMainWindow(threadId)}>
             <ArrowUpRightIcon className="size-4" />
             Open in main window
           </Button>
@@ -254,80 +288,73 @@ export default function OfficeThreadWindow({
       </div>
       <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
         <SidebarProvider defaultOpen={false} className="h-full min-h-0">
-          <ChatView threadId={openThreadId} />
+          <ChatView threadId={threadId} />
         </SidebarProvider>
       </div>
-      {!isMobile ? (
-        <>
-          <div
-            className="absolute inset-y-0 right-0 w-2 cursor-ew-resize"
-            onPointerDown={(event) => {
-              if (event.button !== 0) {
-                return;
-              }
-              resizeStateRef.current = {
-                pointerId: event.pointerId,
-                startX: event.clientX,
-                startY: event.clientY,
-                startRect: rect,
-                direction: "right",
-              };
-              document.body.style.userSelect = "none";
-            }}
-          />
-          <div
-            className="absolute inset-x-0 bottom-0 h-2 cursor-ns-resize"
-            onPointerDown={(event) => {
-              if (event.button !== 0) {
-                return;
-              }
-              resizeStateRef.current = {
-                pointerId: event.pointerId,
-                startX: event.clientX,
-                startY: event.clientY,
-                startRect: rect,
-                direction: "bottom",
-              };
-              document.body.style.userSelect = "none";
-            }}
-          />
-          <div
-            className="absolute bottom-0 right-0 h-4 w-4 cursor-nwse-resize"
-            onPointerDown={(event) => {
-              if (event.button !== 0) {
-                return;
-              }
-              resizeStateRef.current = {
-                pointerId: event.pointerId,
-                startX: event.clientX,
-                startY: event.clientY,
-                startRect: rect,
-                direction: "corner",
-              };
-              document.body.style.userSelect = "none";
-            }}
-          />
-        </>
-      ) : null}
+      <div
+        className="absolute inset-y-0 right-0 w-2 cursor-ew-resize"
+        data-office-thread-resize="right"
+        onPointerDown={(event) => {
+          if (event.button !== 0) {
+            return;
+          }
+          resizeStateRef.current = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            startRect: rect,
+            direction: "right",
+          };
+          document.body.style.userSelect = "none";
+        }}
+      />
+      <div
+        className="absolute inset-x-0 bottom-0 h-2 cursor-ns-resize"
+        data-office-thread-resize="bottom"
+        onPointerDown={(event) => {
+          if (event.button !== 0) {
+            return;
+          }
+          resizeStateRef.current = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            startRect: rect,
+            direction: "bottom",
+          };
+          document.body.style.userSelect = "none";
+        }}
+      />
+      <div
+        className="absolute bottom-0 right-0 h-4 w-4 cursor-nwse-resize"
+        data-office-thread-resize="corner"
+        onPointerDown={(event) => {
+          if (event.button !== 0) {
+            return;
+          }
+          resizeStateRef.current = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            startRect: rect,
+            direction: "corner",
+          };
+          document.body.style.userSelect = "none";
+        }}
+      />
     </div>
   );
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-40">
-      <div className="absolute inset-0 bg-black/28 backdrop-blur-[1px]" onClick={onClose} />
-      {isMobile ? (
-        <div className="absolute inset-x-0 bottom-0 top-16 p-0">{shell}</div>
-      ) : (
-        <div
-          className="absolute"
-          style={{
-            left: rect.x,
-            top: rect.y,
-          }}
-        >
-          {shell}
-        </div>
-      )}
+    <div
+      className="absolute"
+      style={{
+        left: rect.x,
+        top: rect.y,
+        zIndex,
+      }}
+    >
+      {shell}
     </div>
   );
 }

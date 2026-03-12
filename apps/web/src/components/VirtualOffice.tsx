@@ -14,12 +14,20 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "./ui/button";
 import OfficeAgentCreateDialog from "./OfficeAgentCreateDialog";
-import OfficeThreadWindow from "./OfficeThreadWindow";
+import OfficeThreadWindow, {
+  buildDefaultOfficeThreadWindowRect,
+  clampOfficeThreadWindowRect,
+  type OfficeThreadWindowRect,
+} from "./OfficeThreadWindow";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
-import { createOrReuseProjectDraftThread, deleteThreadWithCleanup } from "../lib/threadLifecycle";
+import {
+  createOrReuseProjectDraftThread,
+  deleteThreadWithCleanup,
+  renameThread,
+} from "../lib/threadLifecycle";
 import { mergeThreadsWithDrafts } from "../lib/threadDrafts";
 import { useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
@@ -116,6 +124,29 @@ type DragState =
       startValue: OfficePoint;
       moved: boolean;
     };
+
+interface OpenOfficeThreadWindow {
+  threadId: ThreadId;
+  rect: OfficeThreadWindowRect;
+}
+
+function rectsEqual(a: OfficeThreadWindowRect, b: OfficeThreadWindowRect) {
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+}
+
+function worldToScreen(camera: OfficeCameraState, point: OfficePoint): OfficePoint {
+  return {
+    x: point.x * camera.zoom + camera.x,
+    y: point.y * camera.zoom + camera.y,
+  };
+}
+
+function closestPointOnRect(point: OfficePoint, rect: OfficeThreadWindowRect): OfficePoint {
+  return {
+    x: Math.min(Math.max(point.x, rect.x), rect.x + rect.width),
+    y: Math.min(Math.max(point.y, rect.y), rect.y + rect.height),
+  };
+}
 
 function getServerHttpOrigin() {
   const envUrl = import.meta.env.VITE_SERVER_URL as string | undefined;
@@ -338,10 +369,14 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [hoveredBotId, setHoveredBotId] = useState<string | null>(null);
   const [isInteracting, setIsInteracting] = useState(false);
-  const [selectedThreadId, setSelectedThreadId] = useState<ThreadId | null>(null);
+  const [openWindows, setOpenWindows] = useState<OpenOfficeThreadWindow[]>([]);
+  const [renamingThreadId, setRenamingThreadId] = useState<ThreadId | null>(null);
+  const [renamingTitle, setRenamingTitle] = useState("");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [createDialogProjectId, setCreateDialogProjectId] = useState<ProjectId | null>(null);
   const shouldFitCameraRef = useRef(initialPersistedState === null);
+  const renamingInputRef = useRef<HTMLInputElement | null>(null);
+  const camera = officeState.camera;
 
   stateRef.current = officeState;
 
@@ -365,14 +400,74 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
     [officeInputs, officeState],
   );
 
+  const windowViewport = useMemo(
+    () => ({
+      width:
+        viewportSize.width > 0
+          ? viewportSize.width
+          : typeof window === "undefined"
+            ? 1280
+            : window.innerWidth,
+      height:
+        viewportSize.height > 0
+          ? viewportSize.height
+          : typeof window === "undefined"
+            ? 900
+            : window.innerHeight,
+    }),
+    [viewportSize.height, viewportSize.width],
+  );
+
   useEffect(() => {
-    if (!selectedThreadId) {
+    setOpenWindows((current) =>
+      current.filter((windowState) => mergedThreads.some((thread) => thread.id === windowState.threadId)),
+    );
+  }, [mergedThreads]);
+
+  useEffect(() => {
+    if (!renamingThreadId) {
       return;
     }
-    if (!mergedThreads.some((thread) => thread.id === selectedThreadId)) {
-      setSelectedThreadId(null);
+    if (!mergedThreads.some((thread) => thread.id === renamingThreadId)) {
+      setRenamingThreadId(null);
+      setRenamingTitle("");
+      renamingInputRef.current = null;
     }
-  }, [mergedThreads, selectedThreadId]);
+  }, [mergedThreads, renamingThreadId]);
+
+  useEffect(() => {
+    if (!renamingThreadId) {
+      return;
+    }
+    if (hoveredBotId !== renamingThreadId) {
+      setRenamingThreadId(null);
+      setRenamingTitle("");
+      renamingInputRef.current = null;
+    }
+  }, [hoveredBotId, renamingThreadId]);
+
+  useEffect(() => {
+    if (!renamingThreadId) {
+      return;
+    }
+    renamingInputRef.current?.focus();
+    renamingInputRef.current?.select();
+  }, [renamingThreadId]);
+
+  useEffect(() => {
+    setOpenWindows((current) => {
+      let changed = false;
+      const next = current.map((windowState) => {
+        const clampedRect = clampOfficeThreadWindowRect(windowState.rect, windowViewport);
+        if (rectsEqual(clampedRect, windowState.rect)) {
+          return windowState;
+        }
+        changed = true;
+        return { ...windowState, rect: clampedRect };
+      });
+      return changed ? next : current;
+    });
+  }, [windowViewport]);
 
   useEffect(() => {
     if (areOfficePersistedStatesEqual(officeState, normalizedPersistedState)) {
@@ -511,6 +606,70 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
 
   const [botStates, setBotStates] = useState<Record<string, BotState>>({});
 
+  const openThreadWindow = useCallback(
+    (threadId: ThreadId) => {
+      setOpenWindows((current) => {
+        const existing = current.find((entry) => entry.threadId === threadId);
+        if (existing) {
+          return [...current.filter((entry) => entry.threadId !== threadId), existing];
+        }
+        return [
+          ...current,
+          {
+            threadId,
+            rect: buildDefaultOfficeThreadWindowRect(windowViewport, current.length),
+          },
+        ];
+      });
+    },
+    [windowViewport],
+  );
+
+  const closeThreadWindow = useCallback((threadId: ThreadId) => {
+    setOpenWindows((current) => current.filter((entry) => entry.threadId !== threadId));
+  }, []);
+
+  const focusThreadWindow = useCallback((threadId: ThreadId) => {
+    setOpenWindows((current) => {
+      const existing = current.find((entry) => entry.threadId === threadId);
+      if (!existing || current[current.length - 1]?.threadId === threadId) {
+        return current;
+      }
+      return [...current.filter((entry) => entry.threadId !== threadId), existing];
+    });
+  }, []);
+
+  const updateThreadWindowRect = useCallback((threadId: ThreadId, rect: OfficeThreadWindowRect) => {
+    setOpenWindows((current) =>
+      current.map((entry) => (entry.threadId === threadId ? { ...entry, rect } : entry)),
+    );
+  }, []);
+
+  const openWindowConnections = useMemo(
+    () =>
+      openWindows.flatMap((windowState) => {
+        const desk = deskByThreadId.get(windowState.threadId);
+        if (!desk) {
+          return [];
+        }
+
+        const deskPoint = worldToScreen(camera, {
+          x: desk.element.x + DESK_WIDTH / 2,
+          y: desk.element.y + 18,
+        });
+        const windowPoint = closestPointOnRect(deskPoint, windowState.rect);
+        return [
+          {
+            threadId: windowState.threadId,
+            accentColor: desk.accentColor,
+            deskPoint,
+            windowPoint,
+          },
+        ];
+      }),
+    [camera, deskByThreadId, openWindows],
+  );
+
   useEffect(() => {
     setBotStates((previous) => {
       const next = { ...previous };
@@ -631,9 +790,9 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
       if (shouldSuppressClick()) {
         return;
       }
-      setSelectedThreadId(threadId);
+      openThreadWindow(threadId);
     },
-    [shouldSuppressClick],
+    [openThreadWindow, shouldSuppressClick],
   );
 
   const openCreateDialog = useCallback((projectId: ProjectId | null = null) => {
@@ -655,9 +814,9 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
           title: input.title,
         },
       );
-      setSelectedThreadId(result.threadId);
+      openThreadWindow(result.threadId);
     },
-    [getDraftThread, getDraftThreadByProjectId, setDraftThreadContext, setProjectDraftThreadId],
+    [getDraftThread, getDraftThreadByProjectId, openThreadWindow, setDraftThreadContext, setProjectDraftThreadId],
   );
 
   const handleDeleteThread = useCallback(
@@ -675,21 +834,53 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
         },
         threadId,
       );
-      if (result.deletedDraftOnly || selectedThreadId === threadId) {
-        setSelectedThreadId((current) => (current === threadId ? null : current));
+      if (result.deletedDraftOnly || openWindows.some((entry) => entry.threadId === threadId)) {
+        closeThreadWindow(threadId);
       }
     },
     [
       clearComposerDraftForThread,
       clearProjectDraftThreadById,
       clearTerminalState,
+      closeThreadWindow,
       getDraftThread,
+      openWindows,
       projects,
       removeWorktreeMutation,
-      selectedThreadId,
       settings.confirmThreadDelete,
       threads,
     ],
+  );
+
+  const cancelRename = useCallback(() => {
+    setRenamingThreadId(null);
+    setRenamingTitle("");
+    renamingInputRef.current = null;
+  }, []);
+
+  const startRename = useCallback((threadId: ThreadId, title: string) => {
+    setRenamingThreadId(threadId);
+    setRenamingTitle(title);
+  }, []);
+
+  const commitRename = useCallback(
+    async (threadId: ThreadId) => {
+      await renameThread(
+        {
+          threads,
+          getDraftThread,
+          setDraftThreadContext,
+        },
+        {
+          threadId,
+          title: renamingTitle,
+        },
+      );
+      setRenamingThreadId((current) => (current === threadId ? null : current));
+      setRenamingTitle("");
+      renamingInputRef.current = null;
+    },
+    [getDraftThread, renamingTitle, setDraftThreadContext, threads],
   );
 
   const beginDrag = useCallback(
@@ -860,6 +1051,11 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
   );
 
   const handleWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest("[data-office-thread-window]")) {
+      return;
+    }
+
     event.preventDefault();
     const viewportRect = viewportRef.current?.getBoundingClientRect();
     if (!viewportRect) {
@@ -887,7 +1083,6 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
     setOfficeState(createDefaultOfficePersistedState());
   }, []);
 
-  const camera = officeState.camera;
   const gridColumn = 80 * camera.zoom;
   const gridRow = 40 * camera.zoom;
   const backgroundStyle = {
@@ -1155,9 +1350,17 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
             >
               {isHovered && (
                 <div
-                  className={`absolute left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-border bg-popover p-2.5 text-xs shadow-lg ${position.y < 80 ? "top-full mt-2" : "bottom-full mb-2"}`}
+                  className={`absolute left-1/2 w-56 -translate-x-1/2 rounded-lg border border-border bg-popover p-2.5 text-xs shadow-lg ${position.y < 80 ? "top-full mt-2" : "bottom-full mb-2"}`}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                  }}
+                  data-office-bot-card={bot.threadId}
                 >
-                  <div className="mb-1 font-semibold text-foreground">
+                  <div className="mb-1 truncate font-semibold text-foreground">
                     {bot.title.slice(0, 30)}
                     {bot.title.length > 30 ? "..." : ""}
                   </div>
@@ -1171,8 +1374,54 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
                       {bot.isActive ? "Running" : bot.isError ? "Error" : "Idle"}
                     </span>
                   </div>
-                  <div className="text-muted-foreground/70">{bot.model}</div>
-                  <div className="mt-1 text-[10px] text-muted-foreground/40">Click to open</div>
+                  <div className="truncate text-muted-foreground/70">{bot.model}</div>
+                  {renamingThreadId === bot.threadId ? (
+                    <div className="mt-2 space-y-2">
+                      <input
+                        ref={(element) => {
+                          if (renamingThreadId === bot.threadId) {
+                            renamingInputRef.current = element;
+                          }
+                        }}
+                        data-office-rename-input={bot.threadId}
+                        className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        value={renamingTitle}
+                        onChange={(event) => setRenamingTitle(event.target.value)}
+                        onKeyDown={(event) => {
+                          event.stopPropagation();
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            void commitRename(bot.threadId as ThreadId);
+                          } else if (event.key === "Escape") {
+                            event.preventDefault();
+                            cancelRename();
+                          }
+                        }}
+                        onClick={(event) => event.stopPropagation()}
+                        aria-label={`Rename title for ${bot.title}`}
+                      />
+                      <div className="flex items-center justify-end gap-1.5">
+                        <Button size="xs" variant="ghost" onClick={cancelRename}>
+                          Cancel
+                        </Button>
+                        <Button size="xs" onClick={() => void commitRename(bot.threadId as ThreadId)}>
+                          Save
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <div className="text-[10px] text-muted-foreground/40">Click to open</div>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => startRename(bot.threadId as ThreadId, bot.title)}
+                        aria-label={`Rename ${bot.title}`}
+                      >
+                        Rename
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1244,20 +1493,72 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
           );
         })}
       </div>
+      <div className="pointer-events-none absolute inset-0 z-30">
+        <svg className="h-full w-full overflow-visible">
+          {openWindowConnections.map((connection) => (
+            <g key={connection.threadId} data-office-thread-link={connection.threadId}>
+              <line
+                x1={connection.deskPoint.x}
+                y1={connection.deskPoint.y}
+                x2={connection.windowPoint.x}
+                y2={connection.windowPoint.y}
+                stroke={connection.accentColor}
+                strokeOpacity="0.7"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeDasharray="6 8"
+              />
+              <circle
+                cx={connection.deskPoint.x}
+                cy={connection.deskPoint.y}
+                r="4.5"
+                fill={connection.accentColor}
+                fillOpacity="0.9"
+              />
+              <circle
+                cx={connection.windowPoint.x}
+                cy={connection.windowPoint.y}
+                r="4.5"
+                fill={connection.accentColor}
+                fillOpacity="0.9"
+              />
+            </g>
+          ))}
+        </svg>
+      </div>
+      <div className="pointer-events-none absolute inset-0 z-40">
+        {openWindows.map((windowState, index) => {
+          const desk = deskByThreadId.get(windowState.threadId);
+          if (!desk) {
+            return null;
+          }
+
+          return (
+            <OfficeThreadWindow
+              key={windowState.threadId}
+              threadId={windowState.threadId}
+              rect={windowState.rect}
+              viewport={windowViewport}
+              zIndex={60 + index}
+              isFocused={index === openWindows.length - 1}
+              accentColor={desk.accentColor}
+              projects={projects}
+              threads={mergedThreads}
+              onClose={() => closeThreadWindow(windowState.threadId)}
+              onDelete={handleDeleteThread}
+              onFocus={() => focusThreadWindow(windowState.threadId)}
+              onRectChange={(rect) => updateThreadWindowRect(windowState.threadId, rect)}
+              {...(onOpenThreadInMainWindow ? { onOpenInMainWindow: onOpenThreadInMainWindow } : {})}
+            />
+          );
+        })}
+      </div>
       <OfficeAgentCreateDialog
         open={isCreateDialogOpen}
         initialProjectId={createDialogProjectId}
         projects={projects}
         onOpenChange={setIsCreateDialogOpen}
         onCreate={handleCreateAgent}
-      />
-      <OfficeThreadWindow
-        openThreadId={selectedThreadId}
-        projects={projects}
-        threads={mergedThreads}
-        onClose={() => setSelectedThreadId(null)}
-        onDelete={handleDeleteThread}
-        {...(onOpenThreadInMainWindow ? { onOpenInMainWindow: onOpenThreadInMainWindow } : {})}
       />
 
       <style>{`

@@ -5,15 +5,25 @@ import type { DraftThreadState } from "~/composerDraftStore";
 import {
   createOrReuseProjectDraftThread,
   deleteThreadWithCleanup,
+  renameThread,
 } from "~/lib/threadLifecycle";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Project, type Thread } from "~/types";
 
 const { readNativeApiMock } = vi.hoisted(() => ({
   readNativeApiMock: vi.fn(),
 }));
+const { toastAddMock } = vi.hoisted(() => ({
+  toastAddMock: vi.fn(),
+}));
 
 vi.mock("~/nativeApi", () => ({
   readNativeApi: readNativeApiMock,
+}));
+
+vi.mock("~/components/ui/toast", () => ({
+  toastManager: {
+    add: toastAddMock,
+  },
 }));
 
 function makeDraft(projectId: string, title: string | null): DraftThreadState {
@@ -65,6 +75,7 @@ function makeThread(id: string, projectId: string, worktreePath: string | null):
 
 afterEach(() => {
   readNativeApiMock.mockReset();
+  toastAddMock.mockReset();
 });
 
 describe("threadLifecycle", () => {
@@ -150,6 +161,97 @@ describe("threadLifecycle", () => {
       ThreadId.makeUnsafe("draft-only"),
     );
     expect(clearTerminalState).toHaveBeenCalledWith(ThreadId.makeUnsafe("draft-only"));
+  });
+
+  it("renames a draft-only thread locally", async () => {
+    const setDraftThreadContext = vi.fn();
+
+    const result = await renameThread(
+      {
+        threads: [],
+        getDraftThread: () => makeDraft("project-1", "Draft agent"),
+        setDraftThreadContext,
+      },
+      {
+        threadId: ThreadId.makeUnsafe("draft-1"),
+        title: "  Renamed draft  ",
+      },
+    );
+
+    expect(result).toEqual({ renamed: true });
+    expect(setDraftThreadContext).toHaveBeenCalledWith(ThreadId.makeUnsafe("draft-1"), {
+      title: "Renamed draft",
+    });
+  });
+
+  it("renames a persisted thread through orchestration", async () => {
+    const dispatchCommand = vi.fn().mockResolvedValue(undefined);
+    readNativeApiMock.mockReturnValue({
+      orchestration: { dispatchCommand },
+    });
+
+    const result = await renameThread(
+      {
+        threads: [makeThread("thread-1", "project-1", null)],
+        getDraftThread: () => null,
+        setDraftThreadContext: vi.fn(),
+      },
+      {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        title: "Updated server title",
+      },
+    );
+
+    expect(result).toEqual({ renamed: true });
+    expect(dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "thread.meta.update",
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        title: "Updated server title",
+      }),
+    );
+  });
+
+  it("rejects empty titles when renaming", async () => {
+    const result = await renameThread(
+      {
+        threads: [makeThread("thread-1", "project-1", null)],
+        getDraftThread: () => null,
+        setDraftThreadContext: vi.fn(),
+      },
+      {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        title: "   ",
+      },
+    );
+
+    expect(result).toEqual({ renamed: false });
+    expect(toastAddMock).toHaveBeenCalledWith({
+      type: "warning",
+      title: "Thread title cannot be empty",
+    });
+  });
+
+  it("does nothing when the title is unchanged", async () => {
+    const dispatchCommand = vi.fn().mockResolvedValue(undefined);
+    readNativeApiMock.mockReturnValue({
+      orchestration: { dispatchCommand },
+    });
+
+    const result = await renameThread(
+      {
+        threads: [makeThread("thread-1", "project-1", null)],
+        getDraftThread: () => null,
+        setDraftThreadContext: vi.fn(),
+      },
+      {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        title: "Server thread",
+      },
+    );
+
+    expect(result).toEqual({ renamed: false });
+    expect(dispatchCommand).not.toHaveBeenCalled();
   });
 
   it("deletes a persisted thread and removes an orphaned worktree when confirmed", async () => {

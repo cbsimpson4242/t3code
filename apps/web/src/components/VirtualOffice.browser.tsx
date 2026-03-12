@@ -94,6 +94,22 @@ function getRequiredElement<T extends Element = HTMLElement>(selector: string): 
   return element;
 }
 
+function setInputValue(element: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+  if (!setter) {
+    throw new Error("Missing HTMLInputElement value setter");
+  }
+  setter.call(element, value);
+  element.dispatchEvent(
+    new InputEvent("input", {
+      bubbles: true,
+      data: value,
+      inputType: "insertText",
+    }),
+  );
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 async function mountOffice() {
   const activations: string[] = [];
   const host = document.createElement("div");
@@ -217,12 +233,40 @@ function getButtonsByText(text: string): HTMLButtonElement[] {
   );
 }
 
-function getButtonByAriaLabel(label: string): HTMLButtonElement {
-  const button = document.querySelector<HTMLButtonElement>(`button[aria-label='${label}']`);
+function getWindow(threadId: string): HTMLElement {
+  const element = document.querySelector<HTMLElement>(`[data-office-thread-window='${threadId}']`);
+  if (!element) {
+    throw new Error(`Missing office thread window: ${threadId}`);
+  }
+  return element;
+}
+
+function getWindowButtonByText(threadId: string, text: string): HTMLButtonElement {
+  const button = [...getWindow(threadId).querySelectorAll<HTMLButtonElement>("button")].find(
+    (entry) => entry.textContent?.trim() === text,
+  );
   if (!button) {
-    throw new Error(`Missing button aria-label: ${label}`);
+    throw new Error(`Missing window button "${text}" for ${threadId}`);
   }
   return button;
+}
+
+function getWindowButtonByAriaLabel(threadId: string, label: string): HTMLButtonElement {
+  const button = getWindow(threadId).querySelector<HTMLButtonElement>(`button[aria-label='${label}']`);
+  if (!button) {
+    throw new Error(`Missing window button aria-label "${label}" for ${threadId}`);
+  }
+  return button;
+}
+
+async function hoverOfficeBot(threadId: string) {
+  const bot = getRequiredElement<HTMLElement>(`[data-office-bot='${threadId}']`);
+  bot.dispatchEvent(
+    new MouseEvent("mouseover", {
+      bubbles: true,
+    }),
+  );
+  await waitForOfficeLayout();
 }
 
 function getDialogButtonByText(text: string): HTMLButtonElement {
@@ -279,6 +323,32 @@ describe("VirtualOffice interactions", () => {
     }
   });
 
+  it("does not zoom the office when the wheel event comes from a thread window", async () => {
+    const mounted = await mountOffice();
+    try {
+      getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").click();
+      await waitForOfficeLayout();
+
+      const threadWindow = getWindow("thread-a");
+      const rect = threadWindow.getBoundingClientRect();
+      const zoomBefore = readCameraAttr("data-camera-zoom");
+
+      threadWindow.dispatchEvent(
+        new WheelEvent("wheel", {
+          bubbles: true,
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.top + rect.height / 2,
+          deltaY: -220,
+        }),
+      );
+      await waitForOfficeLayout();
+
+      expect(readCameraAttr("data-camera-zoom")).toBe(zoomBefore);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("persists dragged furniture positions across remounts", async () => {
     const mounted = await mountOffice();
     try {
@@ -302,18 +372,32 @@ describe("VirtualOffice interactions", () => {
     }
   });
 
-  it("opens a desk popup on click, supports opening in the main window, and suppresses click after dragging the desk", async () => {
+  it("keeps multiple desk windows open, draws tether indicators, and leaves the office interactive", async () => {
     const mounted = await mountOffice();
     try {
       getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").click();
       await waitForOfficeLayout();
-      expect(getRequiredElement("[data-office-thread-window='thread-a']")).toBeTruthy();
+      expect(getWindow("thread-a")).toBeTruthy();
+      expect(document.querySelector("[data-office-thread-link='thread-a']")).toBeTruthy();
 
-      getButtonByText("Open in main window").click();
+      getRequiredElement<HTMLElement>("[data-office-desk='thread-b']").click();
+      await waitForOfficeLayout();
+      expect(getWindow("thread-a")).toBeTruthy();
+      expect(getWindow("thread-b")).toBeTruthy();
+      expect(document.querySelector("[data-office-thread-link='thread-b']")).toBeTruthy();
+      expect(document.querySelector("[data-office-window-backdrop]")).toBeNull();
+
+      getWindowButtonByText("thread-a", "Open in main window").click();
       expect(mounted.activations).toEqual(["thread-a"]);
 
       mounted.activations.length = 0;
-      getButtonByAriaLabel("Close office thread window").click();
+      getWindowButtonByAriaLabel("thread-b", "Close office thread window").click();
+      await waitForOfficeLayout();
+      expect(document.querySelector("[data-office-thread-window='thread-b']")).toBeNull();
+      expect(getWindow("thread-a")).toBeTruthy();
+
+      getWindowButtonByAriaLabel("thread-a", "Close office thread window").click();
+      await waitForOfficeLayout();
       await dragSelector("[data-office-desk='thread-a']", { x: 70, y: 20 });
       expect(document.querySelector("[data-office-thread-window='thread-a']")).toBeNull();
       expect(mounted.activations).toEqual([]);
@@ -356,13 +440,8 @@ describe("VirtualOffice interactions", () => {
       getButtonByText("Create Agent").click();
       await waitForOfficeLayout();
 
-      const titleInput = document.querySelector<HTMLInputElement>("input");
-      if (!titleInput) {
-        throw new Error("Missing draft title input");
-      }
-      titleInput.value = "Office draft";
-      titleInput.dispatchEvent(new Event("input", { bubbles: true }));
-      titleInput.dispatchEvent(new Event("change", { bubbles: true }));
+      const titleInput = getRequiredElement<HTMLInputElement>("input[placeholder='Optional agent name']");
+      setInputValue(titleInput, "Office draft");
       getDialogButtonByText("Create Agent").click();
       await waitForOfficeLayout();
 
@@ -404,6 +483,81 @@ describe("VirtualOffice interactions", () => {
       ).toBeNull();
       expect(document.querySelector(`[data-office-thread-window='${draftThread.threadId}']`)).toBeNull();
       expect(document.querySelector(`[data-office-desk='${draftThread.threadId}']`)).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("renames a draft agent from the office hover card", async () => {
+    const mounted = await mountOffice();
+    try {
+      getButtonByText("Create Agent").click();
+      await waitForOfficeLayout();
+
+      const titleInput = getRequiredElement<HTMLInputElement>("input[placeholder='Optional agent name']");
+      setInputValue(titleInput, "Office draft");
+      getDialogButtonByText("Create Agent").click();
+      await waitForOfficeLayout();
+
+      const draftThread = useComposerDraftStore
+        .getState()
+        .getDraftThreadByProjectId(ProjectId.makeUnsafe("project-1"));
+      if (!draftThread) {
+        throw new Error("Missing created draft thread");
+      }
+
+      getWindowButtonByAriaLabel(draftThread.threadId, "Close office thread window").click();
+      await waitForOfficeLayout();
+
+      await hoverOfficeBot(draftThread.threadId);
+      getButtonByText("Rename").click();
+      await waitForOfficeLayout();
+
+      const renameInput = getRequiredElement<HTMLInputElement>(
+        `[data-office-rename-input='${draftThread.threadId}']`,
+      );
+      setInputValue(renameInput, "Renamed agent");
+      getButtonByText("Save").click();
+      await waitForOfficeLayout();
+
+      expect(useComposerDraftStore.getState().getDraftThread(draftThread.threadId)?.title).toBe(
+        "Renamed agent",
+      );
+      expect(
+        getRequiredElement<HTMLElement>(`[data-office-desk='${draftThread.threadId}']`).textContent,
+      ).toContain("Renamed agent");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("resizes a chat window smaller so multiple chats can share the screen", async () => {
+    const mounted = await mountOffice();
+    try {
+      getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").click();
+      await waitForOfficeLayout();
+
+      const window = getWindow("thread-a");
+      const before = window.getBoundingClientRect();
+      const resizeHandle = window.querySelector<HTMLElement>("[data-office-thread-resize='corner']");
+      if (!resizeHandle) {
+        throw new Error("Missing corner resize handle");
+      }
+
+      dispatchPointerSequence(resizeHandle, {
+        pointerId: 9,
+        button: 0,
+        buttons: 1,
+        startX: before.right - 4,
+        startY: before.bottom - 4,
+        endX: before.right - 180,
+        endY: before.bottom - 140,
+      });
+      await waitForOfficeLayout();
+
+      const after = getWindow("thread-a").getBoundingClientRect();
+      expect(after.width).toBeLessThan(before.width - 120);
+      expect(after.height).toBeLessThan(before.height - 90);
     } finally {
       await mounted.cleanup();
     }

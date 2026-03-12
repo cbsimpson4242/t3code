@@ -1,0 +1,7 @@
+﻿
+> @t3tools/web@0.0.9 typecheck
+> tsc --noEmit
+
+src/components/SourceControlPanel.tsx(80,58): error TS2339: Property 'setSourceControlOpen' does not exist on type 'AppStore'.
+src/routes/_chat.tsx(14,47): error TS2339: Property 'sourceControlOpen' does not exist on type 'AppStore'.
+src/routes/_chat.tsx(15,50): error TS2339: Property 'setSourceControlOpen' does not exist on type 'AppStore'.
