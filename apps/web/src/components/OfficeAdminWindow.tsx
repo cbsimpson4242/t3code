@@ -14,6 +14,7 @@ type ResizeDirection = "right" | "bottom" | "corner";
 
 interface OfficeAdminWindowProps {
   rect: OfficeThreadWindowRect;
+  screenRect?: OfficeThreadWindowRect;
   zoom: number;
   zIndex: number;
   isFocused: boolean;
@@ -35,6 +36,7 @@ function rectsEqual(a: OfficeThreadWindowRect, b: OfficeThreadWindowRect) {
 
 export default function OfficeAdminWindow({
   rect,
+  screenRect,
   zoom,
   zIndex,
   isFocused,
@@ -49,6 +51,7 @@ export default function OfficeAdminWindow({
   onOpenLatestThread,
   onCreateAgent,
 }: OfficeAdminWindowProps) {
+  const visualRect = screenRect ?? rect;
   const dragStateRef = useRef<null | {
     pointerId: number;
     startX: number;
@@ -176,8 +179,8 @@ export default function OfficeAdminWindow({
     <div
       className="absolute"
       style={{
-        left: rect.x,
-        top: rect.y,
+        left: visualRect.x,
+        top: visualRect.y,
         zIndex,
       }}
     >
@@ -188,8 +191,8 @@ export default function OfficeAdminWindow({
           boxShadow: isFocused
             ? `0 20px 60px -28px ${accentColor}90, 0 0 0 1px ${accentColor}40`
             : `0 16px 42px -28px ${accentColor}78, 0 0 0 1px ${accentColor}20`,
-          width: rect.width,
-          height: rect.height,
+          width: visualRect.width,
+          height: visualRect.height,
         }}
         data-office-admin-window="office-admin"
         onPointerDownCapture={() => onFocus()}

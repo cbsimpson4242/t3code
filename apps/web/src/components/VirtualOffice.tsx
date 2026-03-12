@@ -56,7 +56,7 @@ import {
   OFFICE_DRAG_THRESHOLD_PX,
   createDefaultOfficePersistedState,
 } from "../office/officeDefaults";
-import { fitCameraToBounds, screenToWorld, zoomAtPoint } from "../office/officeCamera";
+import { fitCameraToBounds, screenToWorld, worldToScreen, zoomAtPoint } from "../office/officeCamera";
 import { OFFICE_GROUP_ACCENT_OPTIONS, getDefaultOfficeGroupAccent } from "../office/officeColors";
 import {
   createOfficeFurniture,
@@ -180,6 +180,35 @@ function closestPointOnRect(point: OfficePoint, rect: OfficeThreadWindowRect): O
     x: Math.min(Math.max(point.x, rect.x), rect.x + rect.width),
     y: Math.min(Math.max(point.y, rect.y), rect.y + rect.height),
   };
+}
+
+function snapToDevicePixel(value: number): number {
+  const ratio = typeof window === "undefined" ? 1 : Math.max(window.devicePixelRatio || 1, 1);
+  return Math.round(value * ratio) / ratio;
+}
+
+function worldRectToScreenRect(
+  rect: OfficeThreadWindowRect,
+  camera: OfficeCameraState,
+): OfficeThreadWindowRect {
+  const topLeft = worldToScreen({ x: rect.x, y: rect.y }, camera);
+  return {
+    x: snapToDevicePixel(topLeft.x),
+    y: snapToDevicePixel(topLeft.y),
+    width: snapToDevicePixel(rect.width * camera.zoom),
+    height: snapToDevicePixel(rect.height * camera.zoom),
+  };
+}
+
+function supportsSharpOfficeSceneZoom(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const supportsZoom = typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("zoom", "1.1");
+  if (!supportsZoom) {
+    return false;
+  }
+  return Boolean(window.desktopBridge) || /electron/i.test(window.navigator.userAgent);
 }
 
 function truncateOfficeThought(text: string, maxLength = 84) {
@@ -527,6 +556,7 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
   const [selectedFurnitureId, setSelectedFurnitureId] = useState<string | null>(null);
   const shouldFitCameraRef = useRef(initialPersistedState === null);
   const camera = officeState.camera;
+  const usesSharpSceneZoom = useMemo(() => supportsSharpOfficeSceneZoom(), []);
 
   stateRef.current = officeState;
 
@@ -843,6 +873,20 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
         ];
       }),
     [deskByThreadId, openWindows],
+  );
+  const openWindowScreenRects = useMemo(
+    () =>
+      new Map(
+        openWindows.map((windowState) => [
+          windowState.threadId,
+          worldRectToScreenRect(windowState.rect, camera),
+        ] as const),
+      ),
+    [camera, openWindows],
+  );
+  const adminWindowScreenRect = useMemo(
+    () => (adminWindowRect ? worldRectToScreenRect(adminWindowRect, camera) : null),
+    [adminWindowRect, camera],
   );
 
   const threadById = useMemo(
@@ -1506,6 +1550,24 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
     `,
     backgroundPosition: `0 0, ${mod(camera.x, gridColumn)}px 0, 0 ${mod(camera.y, gridRow)}px`,
   } satisfies React.CSSProperties;
+  const worldLayerStyle = useMemo<React.CSSProperties>(() => {
+    const snappedX = snapToDevicePixel(camera.x);
+    const snappedY = snapToDevicePixel(camera.y);
+
+    if (usesSharpSceneZoom) {
+      return {
+        left: snappedX,
+        top: snappedY,
+        zoom: camera.zoom,
+        transformOrigin: "0 0",
+      };
+    }
+
+    return {
+      transform: `translate(${snappedX}px, ${snappedY}px) scale(${camera.zoom})`,
+      transformOrigin: "0 0",
+    };
+  }, [camera, usesSharpSceneZoom]);
 
   return (
     <div
@@ -1603,11 +1665,8 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
       </div>
 
       <div
-        className="absolute left-0 top-0 will-change-transform"
-        style={{
-          transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`,
-          transformOrigin: "0 0",
-        }}
+        className={`absolute left-0 top-0 ${usesSharpSceneZoom ? "" : "will-change-transform"}`}
+        style={worldLayerStyle}
       >
         <div
           data-office-admin-desk="office-admin"
@@ -2187,52 +2246,55 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
             ))}
         </svg>
 
-        {openWindows.map((windowState, index) => {
-          const desk = deskByThreadId.get(windowState.threadId);
-          if (!desk) {
-            return null;
-          }
+      </div>
+      {openWindows.map((windowState, index) => {
+        const desk = deskByThreadId.get(windowState.threadId);
+        const screenRect = openWindowScreenRects.get(windowState.threadId);
+        if (!desk || !screenRect) {
+          return null;
+        }
 
-          return (
-            <OfficeThreadWindow
-              key={windowState.threadId}
-              threadId={windowState.threadId}
-              rect={windowState.rect}
-              zoom={camera.zoom}
-              zIndex={20_000 + index}
-              isFocused={index === openWindows.length - 1}
-              accentColor={desk.accentColor}
-              projects={projects}
-              threads={mergedThreads}
-              onClose={() => closeThreadWindow(windowState.threadId)}
-              onDelete={handleDeleteThread}
-              onRename={handleRenameThread}
-              onFocus={() => focusThreadWindow(windowState.threadId)}
-              onRectChange={(rect) => updateThreadWindowRect(windowState.threadId, rect)}
-              {...(onOpenThreadInMainWindow ? { onOpenInMainWindow: onOpenThreadInMainWindow } : {})}
-            />
-          );
-        })}
-
-        {adminWindowRect ? (
-          <OfficeAdminWindow
-            rect={adminWindowRect}
+        return (
+          <OfficeThreadWindow
+            key={windowState.threadId}
+            threadId={windowState.threadId}
+            rect={windowState.rect}
+            screenRect={screenRect}
             zoom={camera.zoom}
-            zIndex={isAdminWindowFocused ? 20_000 + openWindows.length + 1 : 19_999}
-            isFocused={isAdminWindowFocused}
-            accentColor={ADMIN_WINDOW_ACCENT}
+            zIndex={20_000 + index}
+            isFocused={index === openWindows.length - 1}
+            accentColor={desk.accentColor}
             projects={projects}
             threads={mergedThreads}
-            onClose={closeAdminWindow}
-            onFocus={focusAdminWindow}
-            onRectChange={updateAdminWindowRect}
-            onAddProject={handleAddProjectFromOffice}
-            onPickFolder={handlePickProjectFolder}
-            onOpenLatestThread={handleOpenLatestProjectThread}
-            onCreateAgent={handleCreateAgentForProject}
+            onClose={() => closeThreadWindow(windowState.threadId)}
+            onDelete={handleDeleteThread}
+            onRename={handleRenameThread}
+            onFocus={() => focusThreadWindow(windowState.threadId)}
+            onRectChange={(rect) => updateThreadWindowRect(windowState.threadId, rect)}
+            {...(onOpenThreadInMainWindow ? { onOpenInMainWindow: onOpenThreadInMainWindow } : {})}
           />
-        ) : null}
-      </div>
+        );
+      })}
+
+      {adminWindowRect && adminWindowScreenRect ? (
+        <OfficeAdminWindow
+          rect={adminWindowRect}
+          screenRect={adminWindowScreenRect}
+          zoom={camera.zoom}
+          zIndex={isAdminWindowFocused ? 20_000 + openWindows.length + 1 : 19_999}
+          isFocused={isAdminWindowFocused}
+          accentColor={ADMIN_WINDOW_ACCENT}
+          projects={projects}
+          threads={mergedThreads}
+          onClose={closeAdminWindow}
+          onFocus={focusAdminWindow}
+          onRectChange={updateAdminWindowRect}
+          onAddProject={handleAddProjectFromOffice}
+          onPickFolder={handlePickProjectFolder}
+          onOpenLatestThread={handleOpenLatestProjectThread}
+          onCreateAgent={handleCreateAgentForProject}
+        />
+      ) : null}
       <OfficeAgentCreateDialog
         open={isCreateDialogOpen}
         initialProjectId={createDialogProjectId}

@@ -24,6 +24,7 @@ export interface OfficeThreadWindowRect {
 interface OfficeThreadWindowProps {
   threadId: ThreadId;
   rect: OfficeThreadWindowRect;
+  screenRect?: OfficeThreadWindowRect;
   zoom: number;
   zIndex: number;
   isFocused: boolean;
@@ -121,6 +122,7 @@ function summarizeLastUserMessage(thread: Thread | null): string {
 export default function OfficeThreadWindow({
   threadId,
   rect,
+  screenRect,
   zoom,
   zIndex,
   isFocused,
@@ -134,6 +136,7 @@ export default function OfficeThreadWindow({
   onRectChange,
   onOpenInMainWindow,
 }: OfficeThreadWindowProps) {
+  const visualRect = screenRect ?? rect;
   const dragStateRef = useRef<null | {
     pointerId: number;
     startX: number;
@@ -268,8 +271,8 @@ export default function OfficeThreadWindow({
         boxShadow: isFocused
           ? `0 20px 60px -28px ${accentColor}90, 0 0 0 1px ${accentColor}40`
           : `0 16px 42px -28px ${accentColor}78, 0 0 0 1px ${accentColor}20`,
-        width: rect.width,
-        height: rect.height,
+        width: visualRect.width,
+        height: visualRect.height,
       }}
       data-office-thread-window={threadId}
       data-office-thread-focused={isFocused}
@@ -442,8 +445,8 @@ export default function OfficeThreadWindow({
     <div
       className="absolute"
       style={{
-        left: rect.x,
-        top: rect.y,
+        left: visualRect.x,
+        top: visualRect.y,
         zIndex,
       }}
     >
