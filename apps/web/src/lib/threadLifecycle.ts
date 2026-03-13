@@ -48,13 +48,17 @@ export async function createOrReuseProjectDraftThread(
     branch?: string | null;
     worktreePath?: string | null;
     envMode?: DraftThreadEnvMode;
+    reuseExisting?: boolean;
   },
 ): Promise<{ threadId: ThreadId; reused: boolean }> {
   const hasBranchOption = input.branch !== undefined;
   const hasWorktreePathOption = input.worktreePath !== undefined;
   const hasEnvModeOption = input.envMode !== undefined;
   const hasTitleOption = input.title !== undefined;
-  const storedDraftThread = dependencies.getDraftThreadByProjectId(input.projectId);
+  const shouldReuseExisting = input.reuseExisting !== false;
+  const storedDraftThread = shouldReuseExisting
+    ? dependencies.getDraftThreadByProjectId(input.projectId)
+    : null;
 
   if (storedDraftThread) {
     if (hasBranchOption || hasWorktreePathOption || hasEnvModeOption || hasTitleOption) {
@@ -69,7 +73,7 @@ export async function createOrReuseProjectDraftThread(
     return { threadId: storedDraftThread.threadId, reused: true };
   }
 
-  if (input.routeThreadId) {
+  if (shouldReuseExisting && input.routeThreadId) {
     const routeDraftThread = dependencies.getDraftThread(input.routeThreadId);
     if (routeDraftThread && routeDraftThread.projectId === input.projectId) {
       dependencies.setDraftThreadContext(input.routeThreadId, {

@@ -76,6 +76,7 @@ import type {
   OfficeElement,
   OfficePersistedState,
   OfficePoint,
+  OfficeSceneBounds,
   OfficeSize,
 } from "../office/officeTypes";
 
@@ -94,6 +95,9 @@ const IDLE_POIS = [
 const ADMIN_DESK_WIDTH = 156;
 const ADMIN_DESK_HEIGHT = 120;
 const ADMIN_WINDOW_ACCENT = "#f59e0b";
+const OFFICE_MINIMAP_WIDTH = 224;
+const OFFICE_MINIMAP_HEIGHT = 156;
+const OFFICE_MINIMAP_PADDING = 14;
 
 const OFFICE_FURNITURE_LABELS: Record<OfficeFurnitureAddKind, string> = {
   conferenceSet: "Boardroom set",
@@ -214,6 +218,36 @@ function summarizeOfficeThought(thread: Thread) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function rectToBounds(rect: OfficePoint & OfficeSize): OfficeSceneBounds {
+  return {
+    minX: rect.x,
+    minY: rect.y,
+    maxX: rect.x + rect.width,
+    maxY: rect.y + rect.height,
+  };
+}
+
+function unionOfficeBounds(boundsList: OfficeSceneBounds[]): OfficeSceneBounds {
+  if (boundsList.length === 0) {
+    return {
+      minX: 0,
+      minY: 0,
+      maxX: 1,
+      maxY: 1,
+    };
+  }
+
+  return boundsList.reduce(
+    (current, next) => ({
+      minX: Math.min(current.minX, next.minX),
+      minY: Math.min(current.minY, next.minY),
+      maxX: Math.max(current.maxX, next.maxX),
+      maxY: Math.max(current.maxY, next.maxY),
+    }),
+    boundsList[0]!,
+  );
 }
 
 function clampGroupSize(size: OfficeSize): OfficeSize {
@@ -844,6 +878,148 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
       }),
     [deskByThreadId, openWindows],
   );
+  const minimapState = useMemo(() => {
+    const adminDeskRect = {
+      x: officeState.adminDeskPosition.x,
+      y: officeState.adminDeskPosition.y,
+      width: ADMIN_DESK_WIDTH,
+      height: ADMIN_DESK_HEIGHT,
+    };
+    const viewportTopLeft =
+      viewportSize.width > 0 && viewportSize.height > 0
+        ? screenToWorld({ x: 0, y: 0 }, camera)
+        : { x: scene.bounds.minX, y: scene.bounds.minY };
+    const viewportBottomRight =
+      viewportSize.width > 0 && viewportSize.height > 0
+        ? screenToWorld(
+            {
+              x: viewportSize.width,
+              y: viewportSize.height,
+            },
+            camera,
+          )
+        : { x: scene.bounds.maxX, y: scene.bounds.maxY };
+    const viewportWorldRect = {
+      x: Math.min(viewportTopLeft.x, viewportBottomRight.x),
+      y: Math.min(viewportTopLeft.y, viewportBottomRight.y),
+      width: Math.abs(viewportBottomRight.x - viewportTopLeft.x),
+      height: Math.abs(viewportBottomRight.y - viewportTopLeft.y),
+    };
+    const worldBounds = unionOfficeBounds([
+      scene.bounds,
+      rectToBounds(adminDeskRect),
+      ...openWindows.map((windowState) => rectToBounds(windowState.rect)),
+      ...(adminWindowRect ? [rectToBounds(adminWindowRect)] : []),
+    ]);
+    const paddedWorldBounds = {
+      minX: worldBounds.minX - 64,
+      minY: worldBounds.minY - 64,
+      maxX: worldBounds.maxX + 64,
+      maxY: worldBounds.maxY + 64,
+    };
+    const worldWidth = Math.max(paddedWorldBounds.maxX - paddedWorldBounds.minX, 1);
+    const worldHeight = Math.max(paddedWorldBounds.maxY - paddedWorldBounds.minY, 1);
+    const scale = Math.min(
+      (OFFICE_MINIMAP_WIDTH - OFFICE_MINIMAP_PADDING * 2) / worldWidth,
+      (OFFICE_MINIMAP_HEIGHT - OFFICE_MINIMAP_PADDING * 2) / worldHeight,
+    );
+    const contentWidth = worldWidth * scale;
+    const contentHeight = worldHeight * scale;
+    const offsetX = (OFFICE_MINIMAP_WIDTH - contentWidth) / 2;
+    const offsetY = (OFFICE_MINIMAP_HEIGHT - contentHeight) / 2;
+    const mapRect = (rect: OfficePoint & OfficeSize) => ({
+      x: offsetX + (rect.x - paddedWorldBounds.minX) * scale,
+      y: offsetY + (rect.y - paddedWorldBounds.minY) * scale,
+      width: Math.max(rect.width * scale, 3),
+      height: Math.max(rect.height * scale, 3),
+    });
+    const mapPoint = (point: OfficePoint) => ({
+      x: offsetX + (point.x - paddedWorldBounds.minX) * scale,
+      y: offsetY + (point.y - paddedWorldBounds.minY) * scale,
+    });
+
+    return {
+      offsetX,
+      offsetY,
+      scale,
+      worldBounds: paddedWorldBounds,
+      worldWidth,
+      worldHeight,
+      viewportRect: mapRect(viewportWorldRect),
+      adminDeskRect: mapRect(adminDeskRect),
+      groupRects: scene.groups.map((group) => ({
+        key: group.key,
+        accentColor: group.accentColor,
+        rect: mapRect(group.element),
+      })),
+      deskDots: scene.desks.map((desk) => ({
+        threadId: desk.threadId,
+        accentColor: desk.accentColor,
+        isActive: desk.isActive,
+        point: mapPoint({
+          x: desk.element.x + DESK_WIDTH / 2,
+          y: desk.element.y + DESK_HEIGHT / 2,
+        }),
+      })),
+      windowRects: openWindows.map((windowState) => {
+        const desk = deskByThreadId.get(windowState.threadId);
+        return {
+          threadId: windowState.threadId,
+          accentColor: desk?.accentColor ?? "#94a3b8",
+          rect: mapRect(windowState.rect),
+        };
+      }),
+      adminWindowRect: adminWindowRect ? mapRect(adminWindowRect) : null,
+    };
+  }, [
+    adminWindowRect,
+    camera,
+    deskByThreadId,
+    officeState.adminDeskPosition.x,
+    officeState.adminDeskPosition.y,
+    openWindows,
+    scene.bounds,
+    scene.desks,
+    scene.groups,
+    viewportSize.height,
+    viewportSize.width,
+  ]);
+  const handleMinimapPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0 || viewportSize.width <= 0 || viewportSize.height <= 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = event.currentTarget.getBoundingClientRect();
+      const localX = clamp(event.clientX - rect.left, 0, rect.width);
+      const localY = clamp(event.clientY - rect.top, 0, rect.height);
+      const contentX = clamp(
+        localX,
+        minimapState.offsetX,
+        minimapState.offsetX + minimapState.worldWidth * minimapState.scale,
+      );
+      const contentY = clamp(
+        localY,
+        minimapState.offsetY,
+        minimapState.offsetY + minimapState.worldHeight * minimapState.scale,
+      );
+      const targetWorldX =
+        minimapState.worldBounds.minX + (contentX - minimapState.offsetX) / minimapState.scale;
+      const targetWorldY =
+        minimapState.worldBounds.minY + (contentY - minimapState.offsetY) / minimapState.scale;
+
+      setOfficeState((current) => ({
+        ...current,
+        camera: {
+          ...current.camera,
+          x: viewportSize.width / 2 - targetWorldX * current.camera.zoom,
+          y: viewportSize.height / 2 - targetWorldY * current.camera.zoom,
+        },
+      }));
+    },
+    [minimapState, viewportSize.height, viewportSize.width],
+  );
 
   const threadById = useMemo(
     () => new Map(mergedThreads.map((thread) => [thread.id as string, thread] as const)),
@@ -890,6 +1066,42 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
           nextMoveTime: Date.now() + 1000 + Math.random() * 2000,
           transitionMs: 2000,
           facingLeft: false,
+          thoughtEmoji: null,
+        };
+        changed = true;
+      }
+
+      return changed ? next : previous;
+    });
+  }, [bots]);
+
+  useEffect(() => {
+    setBotStates((previous) => {
+      const next = { ...previous };
+      let changed = false;
+
+      for (const bot of bots) {
+        if (!bot.isActive) {
+          continue;
+        }
+        const state = previous[bot.threadId];
+        if (!state) {
+          continue;
+        }
+        const atDesk =
+          Math.abs(state.x - bot.deskLocation.x) < 5 &&
+          Math.abs(state.y - bot.deskLocation.y) < 5 &&
+          state.thoughtEmoji === null;
+        if (atDesk) {
+          continue;
+        }
+        next[bot.threadId] = {
+          ...state,
+          x: bot.deskLocation.x,
+          y: bot.deskLocation.y,
+          transitionMs: 500,
+          nextMoveTime: Date.now() + 500,
+          facingLeft: bot.deskLocation.x < state.x,
           thoughtEmoji: null,
         };
         changed = true;
@@ -1016,6 +1228,7 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
         {
           projectId: input.projectId,
           title: input.title,
+          reuseExisting: false,
         },
       );
       openThreadWindow(result.threadId);
@@ -1599,6 +1812,126 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
               </MenuItem>
             </MenuPopup>
           </Menu>
+        </div>
+      </div>
+
+      <div className="pointer-events-none absolute bottom-4 right-4 z-20 flex flex-col items-end gap-2">
+        <div
+          data-office-minimap
+          className="pointer-events-auto relative overflow-hidden rounded-2xl border border-border/70 bg-background/90 shadow-xl backdrop-blur-sm"
+          style={{
+            width: OFFICE_MINIMAP_WIDTH,
+            height: OFFICE_MINIMAP_HEIGHT,
+          }}
+          onPointerDown={handleMinimapPointerDown}
+          role="button"
+          tabIndex={0}
+          aria-label="Office minimap"
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") {
+              return;
+            }
+            event.preventDefault();
+            fitCameraToScene();
+          }}
+        >
+          <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between border-b border-border/60 bg-background/82 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground/75">
+            <span>Mini Map</span>
+            <span className="text-muted-foreground">{openWindows.length} windows</span>
+          </div>
+          <svg
+            className="absolute inset-0"
+            viewBox={`0 0 ${OFFICE_MINIMAP_WIDTH} ${OFFICE_MINIMAP_HEIGHT}`}
+            aria-hidden="true"
+          >
+            <rect
+              x={0}
+              y={0}
+              width={OFFICE_MINIMAP_WIDTH}
+              height={OFFICE_MINIMAP_HEIGHT}
+              rx={16}
+              fill="rgba(15, 23, 42, 0.45)"
+            />
+            {minimapState.groupRects.map((group) => (
+              <rect
+                key={group.key}
+                data-office-minimap-group={group.key}
+                x={group.rect.x}
+                y={group.rect.y}
+                width={group.rect.width}
+                height={group.rect.height}
+                rx={8}
+                fill={`${group.accentColor}18`}
+                stroke={`${group.accentColor}cc`}
+                strokeWidth={1.6}
+              />
+            ))}
+            <rect
+              data-office-minimap-admin="office-admin"
+              x={minimapState.adminDeskRect.x}
+              y={minimapState.adminDeskRect.y}
+              width={minimapState.adminDeskRect.width}
+              height={minimapState.adminDeskRect.height}
+              rx={6}
+              fill="rgba(245, 158, 11, 0.22)"
+              stroke="rgba(245, 158, 11, 0.9)"
+              strokeWidth={1.4}
+            />
+            {minimapState.windowRects.map((windowRect) => (
+              <rect
+                key={windowRect.threadId}
+                data-office-minimap-window={windowRect.threadId}
+                x={windowRect.rect.x}
+                y={windowRect.rect.y}
+                width={windowRect.rect.width}
+                height={windowRect.rect.height}
+                rx={5}
+                fill="rgba(255,255,255,0.03)"
+                stroke={windowRect.accentColor}
+                strokeWidth={1.5}
+                strokeDasharray="4 4"
+              />
+            ))}
+            {minimapState.adminWindowRect ? (
+              <rect
+                data-office-minimap-window="office-admin"
+                x={minimapState.adminWindowRect.x}
+                y={minimapState.adminWindowRect.y}
+                width={minimapState.adminWindowRect.width}
+                height={minimapState.adminWindowRect.height}
+                rx={5}
+                fill="rgba(255,255,255,0.03)"
+                stroke="rgba(245, 158, 11, 0.95)"
+                strokeWidth={1.5}
+                strokeDasharray="4 4"
+              />
+            ) : null}
+            {minimapState.deskDots.map((desk) => (
+              <circle
+                key={desk.threadId}
+                data-office-minimap-desk={desk.threadId}
+                cx={desk.point.x}
+                cy={desk.point.y}
+                r={desk.isActive ? 3.4 : 2.7}
+                fill={desk.accentColor}
+                fillOpacity={desk.isActive ? 0.95 : 0.82}
+              />
+            ))}
+            <rect
+              data-office-minimap-viewport=""
+              x={minimapState.viewportRect.x}
+              y={minimapState.viewportRect.y}
+              width={minimapState.viewportRect.width}
+              height={minimapState.viewportRect.height}
+              rx={8}
+              fill="rgba(255,255,255,0.06)"
+              stroke="rgba(248, 250, 252, 0.92)"
+              strokeWidth={1.8}
+            />
+          </svg>
+          <div className="absolute bottom-2 left-3 text-[10px] text-muted-foreground/85">
+            Click to recenter
+          </div>
         </div>
       </div>
 

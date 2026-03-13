@@ -1,4 +1,11 @@
-import { EventId, ProjectId, ThreadId, type OrchestrationThreadActivity } from "@t3tools/contracts";
+import {
+  EventId,
+  MessageId,
+  ProjectId,
+  ThreadId,
+  TurnId,
+  type OrchestrationThreadActivity,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Project, type Thread } from "../types";
@@ -242,6 +249,96 @@ describe("officeLayout", () => {
       hasPendingApproval: false,
       needsAttention: true,
     });
+  });
+
+  it("marks desks active while a thread is still visibly in progress", () => {
+    const projects = [makeProject("project-1", "project-a")];
+    const startingThread = makeThread({
+      id: "thread-starting",
+      projectId: "project-1",
+      title: "Starting thread",
+      worktreePath: "group-a",
+    });
+    startingThread.session = {
+      provider: "codex",
+      status: "connecting",
+      createdAt: "2026-03-10T00:00:00.000Z",
+      updatedAt: "2026-03-10T00:00:01.000Z",
+      orchestrationStatus: "starting",
+      activeTurnId: undefined,
+    };
+
+    const activeTurnThread = makeThread({
+      id: "thread-active-turn",
+      projectId: "project-1",
+      title: "Active turn thread",
+      worktreePath: "group-a",
+    });
+    activeTurnThread.session = {
+      provider: "codex",
+      status: "running",
+      createdAt: "2026-03-10T00:00:00.000Z",
+      updatedAt: "2026-03-10T00:00:02.000Z",
+      orchestrationStatus: "running",
+      activeTurnId: TurnId.makeUnsafe("turn-active"),
+    };
+
+    const streamingThread = makeThread({
+      id: "thread-streaming",
+      projectId: "project-1",
+      title: "Streaming thread",
+      worktreePath: "group-a",
+    });
+    streamingThread.messages = [
+      {
+        id: MessageId.makeUnsafe("assistant-streaming"),
+        role: "assistant",
+        text: "Still working",
+        createdAt: "2026-03-10T00:00:03.000Z",
+        streaming: true,
+      },
+    ];
+
+    const staleStoppedThread = makeThread({
+      id: "thread-stale-stopped",
+      projectId: "project-1",
+      title: "Stale stopped thread",
+      worktreePath: "group-a",
+    });
+    staleStoppedThread.session = {
+      provider: "codex",
+      status: "closed",
+      createdAt: "2026-03-10T00:00:00.000Z",
+      updatedAt: "2026-03-10T00:00:04.000Z",
+      orchestrationStatus: "stopped",
+      activeTurnId: TurnId.makeUnsafe("turn-stale"),
+    };
+    staleStoppedThread.latestTurn = {
+      turnId: TurnId.makeUnsafe("turn-stale"),
+      state: "running",
+      requestedAt: "2026-03-10T00:00:00.000Z",
+      startedAt: "2026-03-10T00:00:01.000Z",
+      completedAt: null,
+      assistantMessageId: null,
+    };
+
+    const inputs = deriveOfficeInputs(projects, [
+      startingThread,
+      activeTurnThread,
+      streamingThread,
+      staleStoppedThread,
+    ]);
+
+    expect(inputs.desks.find((desk) => desk.threadId === "thread-starting")?.isActive).toBe(true);
+    expect(inputs.desks.find((desk) => desk.threadId === "thread-active-turn")?.isActive).toBe(
+      true,
+    );
+    expect(inputs.desks.find((desk) => desk.threadId === "thread-streaming")?.isActive).toBe(
+      true,
+    );
+    expect(inputs.desks.find((desk) => desk.threadId === "thread-stale-stopped")?.isActive).toBe(
+      false,
+    );
   });
 
   it("assigns stable accent colors by group key and honors persisted overrides", () => {

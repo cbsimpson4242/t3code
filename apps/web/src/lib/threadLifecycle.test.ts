@@ -134,6 +134,37 @@ describe("threadLifecycle", () => {
     );
   });
 
+  it("creates a fresh draft when reuseExisting is false", async () => {
+    const existingDraft = {
+      threadId: ThreadId.makeUnsafe("draft-1"),
+      ...makeDraft("project-1", "Old title"),
+    };
+    const setDraftThreadContext = vi.fn();
+    const setProjectDraftThreadId = vi.fn();
+
+    const result = await createOrReuseProjectDraftThread(
+      {
+        getDraftThreadByProjectId: () => existingDraft,
+        getDraftThread: () => existingDraft,
+        setDraftThreadContext,
+        setProjectDraftThreadId,
+      },
+      {
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Fresh draft",
+        reuseExisting: false,
+      },
+    );
+
+    expect(result.reused).toBe(false);
+    expect(result.threadId).not.toBe(ThreadId.makeUnsafe("draft-1"));
+    expect(setDraftThreadContext).not.toHaveBeenCalled();
+    expect(setProjectDraftThreadId).toHaveBeenCalledOnce();
+    expect(setProjectDraftThreadId.mock.calls[0]?.[2]).toMatchObject({
+      title: "Fresh draft",
+    });
+  });
+
   it("deletes a draft-only thread without touching the native api", async () => {
     const clearComposerDraftForThread = vi.fn();
     const clearProjectDraftThreadById = vi.fn();

@@ -166,6 +166,7 @@ interface ComposerDraftStoreState {
   ) => void;
   clearProjectDraftThreadId: (projectId: ProjectId) => void;
   clearProjectDraftThreadById: (projectId: ProjectId, threadId: ThreadId) => void;
+  clearDraftThreadsForProject: (projectId: ProjectId) => void;
   clearDraftThread: (threadId: ThreadId) => void;
   setPrompt: (threadId: ThreadId, prompt: string) => void;
   setProvider: (threadId: ThreadId, provider: ProviderKind | null | undefined) => void;
@@ -660,9 +661,13 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             [threadId]: nextDraftThread,
           };
           let nextDraftsByThreadId = state.draftsByThreadId;
+          const previousDraftThread = previousThreadIdForProject
+            ? state.draftThreadsByThreadId[previousThreadIdForProject]
+            : undefined;
           if (
             previousThreadIdForProject &&
             previousThreadIdForProject !== threadId &&
+            previousDraftThread?.projectId !== projectId &&
             !Object.values(nextProjectDraftThreadIdByProjectId).includes(previousThreadIdForProject)
           ) {
             delete nextDraftThreadsByThreadId[previousThreadIdForProject];
@@ -774,17 +779,23 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           return;
         }
         set((state) => {
-          if (state.projectDraftThreadIdByProjectId[projectId] !== threadId) {
+          const mappingMatches = state.projectDraftThreadIdByProjectId[projectId] === threadId;
+          const draftThread = state.draftThreadsByThreadId[threadId];
+          const draftBelongsToProject = draftThread?.projectId === projectId;
+          if (!mappingMatches && !draftBelongsToProject) {
             return state;
           }
-          const { [projectId]: _removed, ...restProjectMappingsRaw } =
-            state.projectDraftThreadIdByProjectId;
-          const restProjectMappings = restProjectMappingsRaw as Record<ProjectId, ThreadId>;
-          const nextDraftThreadsByThreadId: Record<ThreadId, DraftThreadState> = {
-            ...state.draftThreadsByThreadId,
-          };
+          const restProjectMappings = mappingMatches
+            ? (({ [projectId]: _removed, ...remaining }) => remaining)(
+                state.projectDraftThreadIdByProjectId,
+              )
+            : state.projectDraftThreadIdByProjectId;
+          let nextDraftThreadsByThreadId = state.draftThreadsByThreadId;
           let nextDraftsByThreadId = state.draftsByThreadId;
-          if (!Object.values(restProjectMappings).includes(threadId)) {
+          if (draftBelongsToProject && !Object.values(restProjectMappings).includes(threadId)) {
+            nextDraftThreadsByThreadId = {
+              ...state.draftThreadsByThreadId,
+            };
             delete nextDraftThreadsByThreadId[threadId];
             if (state.draftsByThreadId[threadId] !== undefined) {
               nextDraftsByThreadId = { ...state.draftsByThreadId };
@@ -795,6 +806,45 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             draftsByThreadId: nextDraftsByThreadId,
             draftThreadsByThreadId: nextDraftThreadsByThreadId,
             projectDraftThreadIdByProjectId: restProjectMappings,
+          };
+        });
+      },
+      clearDraftThreadsForProject: (projectId) => {
+        if (projectId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const threadIdsForProject = Object.entries(state.draftThreadsByThreadId)
+            .filter(([, draftThread]) => draftThread.projectId === projectId)
+            .map(([threadId]) => threadId as ThreadId);
+          const mappedThreadId = state.projectDraftThreadIdByProjectId[projectId];
+          if (threadIdsForProject.length === 0 && mappedThreadId === undefined) {
+            return state;
+          }
+          const threadIdsToRemove = new Set<ThreadId>(threadIdsForProject);
+          if (mappedThreadId) {
+            threadIdsToRemove.add(mappedThreadId);
+          }
+          const nextProjectDraftThreadIdByProjectId = Object.fromEntries(
+            Object.entries(state.projectDraftThreadIdByProjectId).filter(
+              ([mappedProjectId, mappedThreadIdEntry]) =>
+                mappedProjectId !== projectId && !threadIdsToRemove.has(mappedThreadIdEntry as ThreadId),
+            ),
+          ) as Record<ProjectId, ThreadId>;
+          const nextDraftThreadsByThreadId = Object.fromEntries(
+            Object.entries(state.draftThreadsByThreadId).filter(
+              ([threadId]) => !threadIdsToRemove.has(threadId as ThreadId),
+            ),
+          ) as Record<ThreadId, DraftThreadState>;
+          const nextDraftsByThreadId = Object.fromEntries(
+            Object.entries(state.draftsByThreadId).filter(
+              ([threadId]) => !threadIdsToRemove.has(threadId as ThreadId),
+            ),
+          ) as Record<ThreadId, ComposerThreadDraftState>;
+          return {
+            draftsByThreadId: nextDraftsByThreadId,
+            draftThreadsByThreadId: nextDraftThreadsByThreadId,
+            projectDraftThreadIdByProjectId: nextProjectDraftThreadIdByProjectId,
           };
         });
       },

@@ -773,6 +773,24 @@ describe("VirtualOffice interactions", () => {
     }
   });
 
+  it("renders a minimap with office markers and open window indicators", async () => {
+    const mounted = await mountOffice();
+    try {
+      expect(document.querySelector("[data-office-minimap]")).toBeTruthy();
+      expect(document.querySelector("[data-office-minimap-group='group-a']")).toBeTruthy();
+      expect(document.querySelector("[data-office-minimap-group='group-b']")).toBeTruthy();
+      expect(document.querySelector("[data-office-minimap-desk='thread-a']")).toBeTruthy();
+      expect(document.querySelector("[data-office-minimap-viewport]")).toBeTruthy();
+
+      getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").click();
+      await waitForOfficeLayout();
+
+      expect(document.querySelector("[data-office-minimap-window='thread-a']")).toBeTruthy();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("creates a draft agent from the office toolbar", async () => {
     const mounted = await mountOffice();
     try {
@@ -794,6 +812,55 @@ describe("VirtualOffice interactions", () => {
       expect(
         document.querySelector(`[data-office-thread-window='${draftThread?.threadId ?? ""}']`),
       ).toBeTruthy();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("creates a second draft agent for the same project without replacing the first", async () => {
+    const mounted = await mountOffice();
+    try {
+      getButtonByText("Create Agent").click();
+      await waitForOfficeLayout();
+      setInputValue(
+        getRequiredElement<HTMLInputElement>("input[placeholder='Optional agent name']"),
+        "Office draft one",
+      );
+      getDialogButtonByText("Create Agent").click();
+      await waitForOfficeLayout();
+
+      const firstDraft = useComposerDraftStore
+        .getState()
+        .getDraftThreadByProjectId(ProjectId.makeUnsafe("project-1"));
+      if (!firstDraft) {
+        throw new Error("Missing first created draft thread");
+      }
+
+      getButtonByText("Create Agent").click();
+      await waitForOfficeLayout();
+      setInputValue(
+        getRequiredElement<HTMLInputElement>("input[placeholder='Optional agent name']"),
+        "Office draft two",
+      );
+      getDialogButtonByText("Create Agent").click();
+      await waitForOfficeLayout();
+
+      const secondDraft = useComposerDraftStore
+        .getState()
+        .getDraftThreadByProjectId(ProjectId.makeUnsafe("project-1"));
+      if (!secondDraft) {
+        throw new Error("Missing second created draft thread");
+      }
+
+      expect(secondDraft.threadId).not.toBe(firstDraft.threadId);
+      expect(useComposerDraftStore.getState().getDraftThread(firstDraft.threadId)?.title).toBe(
+        "Office draft one",
+      );
+      expect(useComposerDraftStore.getState().getDraftThread(secondDraft.threadId)?.title).toBe(
+        "Office draft two",
+      );
+      expect(document.querySelector(`[data-office-desk='${firstDraft.threadId}']`)).toBeTruthy();
+      expect(document.querySelector(`[data-office-desk='${secondDraft.threadId}']`)).toBeTruthy();
     } finally {
       await mounted.cleanup();
     }

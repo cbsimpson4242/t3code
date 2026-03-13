@@ -268,8 +268,8 @@ export default function Sidebar() {
   const clearTerminalState = useTerminalStateStore((state) => state.clearTerminalState);
   const setProjectDraftThreadId = useComposerDraftStore((store) => store.setProjectDraftThreadId);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
-  const clearProjectDraftThreadId = useComposerDraftStore(
-    (store) => store.clearProjectDraftThreadId,
+  const clearDraftThreadsForProject = useComposerDraftStore(
+    (store) => store.clearDraftThreadsForProject,
   );
   const clearProjectDraftThreadById = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadById,
@@ -678,11 +678,7 @@ export default function Sidebar() {
       if (!confirmed) return;
 
       try {
-        const projectDraftThread = getDraftThreadByProjectId(projectId);
-        if (projectDraftThread) {
-          clearComposerDraftForThread(projectDraftThread.threadId);
-        }
-        clearProjectDraftThreadId(projectId);
+        clearDraftThreadsForProject(projectId);
         await api.orchestration.dispatchCommand({
           type: "project.delete",
           commandId: newCommandId(),
@@ -699,9 +695,7 @@ export default function Sidebar() {
       }
     },
     [
-      clearComposerDraftForThread,
-      clearProjectDraftThreadId,
-      getDraftThreadByProjectId,
+      clearDraftThreadsForProject,
       projects,
       threads,
     ],

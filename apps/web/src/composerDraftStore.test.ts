@@ -191,6 +191,7 @@ describe("composerDraftStore project draft thread mapping", () => {
       runtimeMode: "full-access",
       interactionMode: "default",
       createdAt: "2026-01-01T00:00:00.000Z",
+      title: "New thread",
     });
     expect(useComposerDraftStore.getState().getDraftThread(threadId)).toEqual({
       projectId,
@@ -200,6 +201,7 @@ describe("composerDraftStore project draft thread mapping", () => {
       runtimeMode: "full-access",
       interactionMode: "default",
       createdAt: "2026-01-01T00:00:00.000Z",
+      title: "New thread",
     });
   });
 
@@ -239,8 +241,10 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)?.threadId).toBe(
       otherThreadId,
     );
-    expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
-    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)).toMatchObject({
+      projectId,
+    });
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe("orphan me");
   });
 
   it("keeps composer drafts when the thread is still mapped by another project", () => {
@@ -264,6 +268,37 @@ describe("composerDraftStore project draft thread mapping", () => {
     store.clearDraftThread(threadId);
     expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)).toBeNull();
     expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
+  });
+
+  it("clears a non-primary draft thread by id", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId);
+    store.setProjectDraftThreadId(projectId, otherThreadId);
+    store.setPrompt(threadId, "older draft");
+
+    store.clearProjectDraftThreadById(projectId, threadId);
+
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+    expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)?.threadId).toBe(
+      otherThreadId,
+    );
+  });
+
+  it("clears every draft thread for a project", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId);
+    store.setProjectDraftThreadId(projectId, otherThreadId);
+    store.setPrompt(threadId, "older draft");
+    store.setPrompt(otherThreadId, "newer draft");
+
+    store.clearDraftThreadsForProject(projectId);
+
+    expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)).toBeNull();
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
+    expect(useComposerDraftStore.getState().getDraftThread(otherThreadId)).toBeNull();
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+    expect(useComposerDraftStore.getState().draftsByThreadId[otherThreadId]).toBeUndefined();
   });
 
   it("updates branch context on an existing draft thread", () => {

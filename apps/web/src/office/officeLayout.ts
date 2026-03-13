@@ -1,5 +1,5 @@
 import type { Project, Thread } from "../types";
-import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
+import { derivePendingApprovals, derivePendingUserInputs, derivePhase } from "../session-logic";
 import {
   DEFAULT_GROUP_APPEND_STEP,
   DEFAULT_GROUP_START,
@@ -117,6 +117,20 @@ function nextDeskOffset(existingOffsets: OfficePoint[]): OfficePoint {
   };
 }
 
+function threadHasVisibleOfficeActivity(thread: Thread): boolean {
+  const sessionPhase = derivePhase(thread.session);
+  if (sessionPhase === "running" || sessionPhase === "connecting") {
+    return true;
+  }
+  // The office should only animate for work that is still visibly in flight.
+  // Stale activeTurn/latestTurn markers can survive stop/reconnect edges.
+  return thread.messages.some((message) => message.role === "assistant" && message.streaming);
+}
+
+function threadHasOfficeError(thread: Thread): boolean {
+  return thread.session?.status === "error" || thread.latestTurn?.state === "error";
+}
+
 export function deriveOfficeInputs(
   projects: Project[],
   threads: Thread[],
@@ -171,12 +185,8 @@ export function deriveOfficeInputs(
         model: thread.model,
         groupKey: group.key,
         accentColor: resolveOfficeGroupAccent(group.key, groupAccentColorsByKey),
-        isActive:
-          thread.session?.status === "running" ||
-          thread.session?.orchestrationStatus === "running" ||
-          thread.latestTurn?.state === "running",
-        isError:
-          thread.session?.status === "error" || thread.latestTurn?.state === "error",
+        isActive: threadHasVisibleOfficeActivity(thread),
+        isError: threadHasOfficeError(thread),
         colorIndex: groupIndex + threadIndex,
       };
     }),
