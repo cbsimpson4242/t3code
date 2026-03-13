@@ -52,6 +52,11 @@ const FURNITURE_BLUEPRINTS: Record<OfficeFurnitureType, OfficeFurnitureBlueprint
     width: 96,
     height: 128,
   },
+  tv: {
+    type: "tv",
+    width: 132,
+    height: 90,
+  },
 };
 
 const FURNITURE_BASE_IDS: Record<OfficeFurnitureType, string> = {
@@ -60,6 +65,7 @@ const FURNITURE_BASE_IDS: Record<OfficeFurnitureType, string> = {
   chair: "chair",
   plant: "plant",
   coffeeBar: "coffee-bar",
+  tv: "tv",
 };
 
 const DEFAULT_LINKED_FURNITURE_OFFSETS = {
@@ -68,6 +74,7 @@ const DEFAULT_LINKED_FURNITURE_OFFSETS = {
   plantLeft: { x: 26, y: 426 },
   plantRight: { x: 402, y: 426 },
   coffeeBar: { x: 386, y: 166 },
+  tv: { x: 372, y: 44 },
 } as const satisfies Record<string, OfficePoint>;
 
 const LEGACY_DEFAULT_FURNITURE_IDS = new Set([
@@ -84,6 +91,7 @@ const LEGACY_DEFAULT_FURNITURE_IDS = new Set([
   "plant-left",
   "plant-right",
   "coffee-bar",
+  "tv",
 ]);
 
 function cloneMetadata(metadata: OfficeElementMetadata | undefined): OfficeElementMetadata | undefined {
@@ -295,6 +303,7 @@ function createCongregationTargets(element: OfficeElement): OfficeCongregationTa
           y: centerY,
         },
       ];
+    case "tv":
     default:
       return [];
   }
@@ -387,6 +396,7 @@ export function createDefaultOfficeFurnitureForGroup(
       existingFurniture,
       {
         id: createGroupFurnitureId(groupKey, suffix),
+        ...(type === "tv" ? { metadata: { groupKey, role: "tv" } } : {}),
       },
     );
 
@@ -396,6 +406,7 @@ export function createDefaultOfficeFurnitureForGroup(
     linked("plant", "plant-left", DEFAULT_LINKED_FURNITURE_OFFSETS.plantLeft),
     linked("plant", "plant-right", DEFAULT_LINKED_FURNITURE_OFFSETS.plantRight),
     linked("coffeeBar", "coffee-bar", DEFAULT_LINKED_FURNITURE_OFFSETS.coffeeBar),
+    linked("tv", "tv", DEFAULT_LINKED_FURNITURE_OFFSETS.tv),
   ];
 }
 
@@ -648,6 +659,9 @@ export function getDefaultOfficeFurnitureFootprint() {
         GROUP_DESK_LAYOUT_LEFT_PADDING,
       DEFAULT_LINKED_FURNITURE_OFFSETS.coffeeBar.x +
         FURNITURE_BLUEPRINTS.coffeeBar.width +
+        GROUP_DESK_LAYOUT_LEFT_PADDING,
+      DEFAULT_LINKED_FURNITURE_OFFSETS.tv.x +
+        FURNITURE_BLUEPRINTS.tv.width +
         GROUP_DESK_LAYOUT_LEFT_PADDING,
       DEFAULT_LINKED_FURNITURE_OFFSETS.plantRight.x +
         FURNITURE_BLUEPRINTS.plant.width +

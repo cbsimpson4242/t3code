@@ -28,8 +28,10 @@ import {
   TerminalRestartInput,
   TerminalWriteInput,
 } from "./terminal";
+import { PreviewSnapshot } from "./preview";
 import { KeybindingRule } from "./keybindings";
 import { ProjectSearchEntriesInput, ProjectWriteFileInput } from "./project";
+import { RUNTIME_WS_METHODS, RuntimeCatalog, RuntimeGetCatalogInput } from "./runtime";
 import { OpenInEditorInput } from "./editor";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
@@ -67,6 +69,12 @@ export const WS_METHODS = {
   // Server meta
   serverGetConfig: "server.getConfig",
   serverUpsertKeybinding: "server.upsertKeybinding",
+
+  // Preview methods
+  previewGetSnapshot: "preview.getSnapshot",
+
+  // Runtime methods
+  runtimeGetCatalog: RUNTIME_WS_METHODS.getCatalog,
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -75,6 +83,8 @@ export const WS_CHANNELS = {
   terminalEvent: "terminal.event",
   serverWelcome: "server.welcome",
   serverConfigUpdated: "server.configUpdated",
+  previewSnapshot: "preview.snapshot",
+  runtimeCatalogUpdated: "runtime.catalogUpdated",
 } as const;
 
 // -- Tagged Union of all request body schemas ─────────────────────────
@@ -129,6 +139,12 @@ const WebSocketRequestBody = Schema.Union([
   // Server meta
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
+
+  // Preview
+  tagRequestBody(WS_METHODS.previewGetSnapshot, Schema.Struct({})),
+
+  // Runtime
+  tagRequestBody(WS_METHODS.runtimeGetCatalog, RuntimeGetCatalogInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({
@@ -169,3 +185,9 @@ export const WsWelcomePayload = Schema.Struct({
   bootstrapThreadId: Schema.optional(ThreadId),
 });
 export type WsWelcomePayload = typeof WsWelcomePayload.Type;
+
+export const PreviewSnapshotPayload = PreviewSnapshot;
+export type PreviewSnapshotPayload = typeof PreviewSnapshotPayload.Type;
+
+export const RuntimeCatalogPayload = RuntimeCatalog;
+export type RuntimeCatalogPayload = typeof RuntimeCatalogPayload.Type;

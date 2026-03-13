@@ -12,19 +12,20 @@ type CatalogProvider = keyof typeof MODEL_OPTIONS_BY_PROVIDER;
 
 const MODEL_SLUG_SET_BY_PROVIDER: Record<CatalogProvider, ReadonlySet<ModelSlug>> = {
   codex: new Set(MODEL_OPTIONS_BY_PROVIDER.codex.map((option) => option.slug)),
+  openai: new Set(MODEL_OPTIONS_BY_PROVIDER.openai.map((option) => option.slug)),
 };
 
-export function getModelOptions(provider: ProviderKind = "codex") {
+export function getModelOptions(provider: ProviderKind = "openai") {
   return MODEL_OPTIONS_BY_PROVIDER[provider];
 }
 
-export function getDefaultModel(provider: ProviderKind = "codex"): ModelSlug {
+export function getDefaultModel(provider: ProviderKind = "openai"): ModelSlug {
   return DEFAULT_MODEL_BY_PROVIDER[provider];
 }
 
 export function normalizeModelSlug(
   model: string | null | undefined,
-  provider: ProviderKind = "codex",
+  provider: ProviderKind = "openai",
 ): ModelSlug | null {
   if (typeof model !== "string") {
     return null;
@@ -42,7 +43,7 @@ export function normalizeModelSlug(
 
 export function resolveModelSlug(
   model: string | null | undefined,
-  provider: ProviderKind = "codex",
+  provider: ProviderKind = "openai",
 ): ModelSlug {
   const normalized = normalizeModelSlug(model, provider);
   if (!normalized) {
@@ -62,17 +63,17 @@ export function resolveModelSlugForProvider(
 }
 
 export function getReasoningEffortOptions(
-  provider: ProviderKind = "codex",
+  provider: ProviderKind = "openai",
 ): ReadonlyArray<CodexReasoningEffort> {
-  return provider === "codex" ? CODEX_REASONING_EFFORT_OPTIONS : [];
+  return provider === "codex" || provider === "openai" ? CODEX_REASONING_EFFORT_OPTIONS : [];
 }
 
-export function getDefaultReasoningEffort(provider: "codex"): CodexReasoningEffort;
+export function getDefaultReasoningEffort(provider: "codex" | "openai"): CodexReasoningEffort;
 export function getDefaultReasoningEffort(provider: ProviderKind): CodexReasoningEffort | null;
 export function getDefaultReasoningEffort(
-  provider: ProviderKind = "codex",
+  provider: ProviderKind = "openai",
 ): CodexReasoningEffort | null {
-  return provider === "codex" ? "high" : null;
+  return provider === "codex" || provider === "openai" ? "high" : null;
 }
 
 export { CODEX_REASONING_EFFORT_OPTIONS };

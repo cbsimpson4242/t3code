@@ -4,6 +4,8 @@ import {
   ORCHESTRATION_WS_METHODS,
   type ContextMenuItem,
   type NativeApi,
+  PreviewSnapshot,
+  RuntimeCatalog,
   ServerConfigUpdatedPayload,
   TerminalEvent,
   WS_CHANNELS,
@@ -185,6 +187,22 @@ export function createWsNativeApi(): NativeApi {
     server: {
       getConfig: () => transport.request(WS_METHODS.serverGetConfig),
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
+    },
+    preview: {
+      getSnapshot: () => transport.request(WS_METHODS.previewGetSnapshot),
+      onSnapshot: (callback) =>
+        transport.subscribe(WS_CHANNELS.previewSnapshot, (data) => {
+          const payload = decodeAndWarnOnFailure(PreviewSnapshot, data);
+          if (payload) callback(payload);
+        }),
+    },
+    runtime: {
+      getCatalog: () => transport.request(WS_METHODS.runtimeGetCatalog),
+      onCatalogUpdated: (callback) =>
+        transport.subscribe(WS_CHANNELS.runtimeCatalogUpdated, (data) => {
+          const payload = decodeAndWarnOnFailure(RuntimeCatalog, data);
+          if (payload) callback(payload);
+        }),
     },
     orchestration: {
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),

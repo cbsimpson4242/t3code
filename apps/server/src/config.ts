@@ -70,6 +70,14 @@ export const resolveStaticDir = Effect.fn(function* () {
     return bundledClient;
   }
 
+  const openAiMonorepoClient = resolve(join(import.meta.dirname, "../../openai-web/dist"));
+  const openAiMonorepoStat = yield* exists(join(openAiMonorepoClient, "index.html")).pipe(
+    Effect.orElseSucceed(() => false),
+  );
+  if (openAiMonorepoStat) {
+    return openAiMonorepoClient;
+  }
+
   const monorepoClient = resolve(join(import.meta.dirname, "../../web/dist"));
   const monorepoStat = yield* exists(join(monorepoClient, "index.html")).pipe(
     Effect.orElseSucceed(() => false),

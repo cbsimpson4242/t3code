@@ -1,0 +1,37 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+    "paths": {
+      "~/*": ["./src/*", "../web/src/*"],
+      "@legacy/*": ["../web/src/*"]
+    },
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "namespaceImportPackages": ["@effect/platform-node"],
+        "diagnosticSeverity": {
+          "importFromBarrel": "error",
+          "anyUnknownInErrorContext": "warning",
+          "instanceOfSchema": "warning",
+          "deterministicKeys": "warning"
+        }
+      }
+    ]
+  },
+  "include": ["src", "../web/src", "vite.config.ts"],
+  "exclude": [
+    "../web/src/main.tsx",
+    "../web/src/router.ts",
+    "../web/src/routeTree.gen.ts",
+    "../web/src/routes/**",
+    "../web/src/components/Sidebar.tsx",
+    "../web/src/components/Sidebar*.tsx",
+    "../web/src/**/*.test.ts",
+    "../web/src/**/*.test.tsx",
+    "../web/src/**/*.browser.tsx"
+  ]
+}

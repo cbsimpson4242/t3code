@@ -1,11 +1,12 @@
 import { ArrowUpRight, PanelsTopLeft } from "lucide-react";
+import type { ThreadId } from "@t3tools/contracts";
 
 import { isElectron } from "../env";
 import { useOfficeWindowState } from "../hooks/useOfficeWindowState";
 import { Button } from "./ui/button";
 import VirtualOffice from "./VirtualOffice";
 
-export default function OfficePane() {
+export default function OfficePane(props: { focusThreadId?: ThreadId | null }) {
   const { isOfficeWindowOpen, openOfficeWindow, focusOfficeWindow, closeOfficeWindow } =
     useOfficeWindowState();
 
@@ -44,7 +45,7 @@ export default function OfficePane() {
           </Button>
         </div>
       )}
-      <VirtualOffice />
+      <VirtualOffice focusThreadId={props.focusThreadId ?? null} />
     </div>
   );
 }

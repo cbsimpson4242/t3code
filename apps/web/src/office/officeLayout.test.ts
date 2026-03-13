@@ -196,9 +196,38 @@ describe("officeLayout", () => {
       persistedState: createDefaultOfficePersistedState(),
     });
 
-    expect(build.persistedState.defaultFurnitureSeededGroupKeys.toSorted()).toEqual(["group-a", "group-b"]);
-    expect(build.persistedState.furniture.filter((element) => element.placement.kind === "groupLinked")).toHaveLength(10);
+    expect(build.persistedState.defaultFurnitureSeededGroupKeys.toSorted()).toEqual([
+      "group-a",
+      "group-b",
+      "tv:group-a",
+      "tv:group-b",
+    ]);
+    expect(build.persistedState.furniture.filter((element) => element.placement.kind === "groupLinked")).toHaveLength(12);
     expect(build.scene.groups.every((group) => group.congregationTargets.length > 0)).toBe(true);
+  });
+
+  it("backfills newly added default office furniture for already-seeded groups", () => {
+    const projects = [makeProject("project-1", "project-a")];
+    const threads = [makeThread({ id: "thread-1", projectId: "project-1", title: "Thread 1", worktreePath: "group-a" })];
+
+    const firstBuild = buildOfficeScene({
+      ...deriveOfficeInputs(projects, threads),
+      persistedState: createDefaultOfficePersistedState(),
+    });
+
+    const nextBuild = buildOfficeScene({
+      ...deriveOfficeInputs(projects, threads),
+      persistedState: {
+        ...firstBuild.persistedState,
+        furniture: firstBuild.persistedState.furniture.filter((element) => element.id !== "group:group-a:tv"),
+        defaultFurnitureSeededGroupKeys: ["group-a"],
+      },
+    });
+
+    expect(nextBuild.persistedState.furniture.some((element) => element.id === "group:group-a:tv")).toBe(
+      true,
+    );
+    expect(nextBuild.scene.furniture.some((element) => element.id === "group:group-a:tv")).toBe(true);
   });
 
   it("moves linked furniture automatically when the group anchor changes", () => {

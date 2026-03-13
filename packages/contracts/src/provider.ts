@@ -53,6 +53,7 @@ const CodexProviderStartOptions = Schema.Struct({
 });
 
 export const ProviderStartOptions = Schema.Struct({
+  openai: Schema.optional(CodexProviderStartOptions),
   codex: Schema.optional(CodexProviderStartOptions),
 });
 export type ProviderStartOptions = typeof ProviderStartOptions.Type;

@@ -23,6 +23,7 @@ import { terminalRunningSubprocessFromEvent } from "../terminalActivity";
 import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import { usePreviewStore } from "../previewStore";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -167,6 +168,11 @@ function EventRouter() {
     let syncing = false;
     let pending = false;
     let needsProviderInvalidation = false;
+    const syncPreviewSnapshot = async () => {
+      const snapshot = await api.preview.getSnapshot();
+      if (disposed) return;
+      usePreviewStore.getState().setSnapshot(snapshot);
+    };
 
     const flushSnapshotSync = async (): Promise<void> => {
       const snapshot = await api.orchestration.getSnapshot();
@@ -240,8 +246,12 @@ function EventRouter() {
           hasRunningSubprocess,
         );
     });
+    const unsubPreviewSnapshot = api.preview.onSnapshot((snapshot) => {
+      usePreviewStore.getState().setSnapshot(snapshot);
+    });
     const unsubWelcome = onServerWelcome((payload) => {
       void (async () => {
+        await syncPreviewSnapshot();
         await syncSnapshot();
         if (disposed) {
           return;
@@ -266,6 +276,7 @@ function EventRouter() {
         handledBootstrapThreadIdRef.current = payload.bootstrapThreadId;
       })().catch(() => undefined);
     });
+    void syncPreviewSnapshot().catch(() => undefined);
     const unsubServerConfigUpdated = onServerConfigUpdated((payload) => {
       const signature = JSON.stringify(payload.issues);
       if (lastConfigIssuesSignatureRef.current === signature) {
@@ -314,6 +325,7 @@ function EventRouter() {
       domainEventFlushThrottler.cancel();
       unsubDomainEvent();
       unsubTerminalEvent();
+      unsubPreviewSnapshot();
       unsubWelcome();
       unsubServerConfigUpdated();
     };

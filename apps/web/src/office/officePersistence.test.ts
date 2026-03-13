@@ -111,4 +111,41 @@ describe("officePersistence", () => {
     });
     expect(parsed?.defaultFurnitureSeededGroupKeys).toEqual(["group-a"]);
   });
+
+  it("accepts TVs in persisted v3 furniture records", () => {
+    const parsed = parseOfficePersistedState({
+      version: 3,
+      camera: { x: 0, y: 0, zoom: 1 },
+      furniture: [
+        {
+          id: "group:group-a:tv",
+          type: "tv",
+          width: 132,
+          height: 90,
+          draggable: true,
+          placement: {
+            kind: "groupLinked",
+            groupKey: "group-a",
+            offset: { x: 372, y: 44 },
+          },
+          metadata: {
+            groupKey: "group-a",
+            role: "tv",
+          },
+        },
+      ],
+      projectGroupAnchors: { "group-a": { x: 220, y: 88 } },
+      projectGroupSizesByKey: {},
+      deskOffsetsByThreadId: {},
+      groupAccentColorsByKey: {},
+      adminDeskPosition: { x: 40, y: 40 },
+      defaultFurnitureSeededGroupKeys: ["group-a"],
+    });
+
+    expect(parsed?.furniture[0]?.type).toBe("tv");
+    expect(parsed?.furniture[0]?.metadata).toEqual({
+      groupKey: "group-a",
+      role: "tv",
+    });
+  });
 });

@@ -40,6 +40,8 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
 } from "./orchestration";
+import type { PreviewSnapshot } from "./preview";
+import type { RuntimeCatalog } from "./runtime";
 import { EditorId } from "./editor";
 
 export interface ContextMenuItem<T extends string = string> {
@@ -155,6 +157,14 @@ export interface NativeApi {
   server: {
     getConfig: () => Promise<ServerConfig>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
+  };
+  preview: {
+    getSnapshot: () => Promise<PreviewSnapshot>;
+    onSnapshot: (callback: (snapshot: PreviewSnapshot) => void) => () => void;
+  };
+  runtime: {
+    getCatalog: () => Promise<RuntimeCatalog>;
+    onCatalogUpdated: (callback: (catalog: RuntimeCatalog) => void) => () => void;
   };
   orchestration: {
     getSnapshot: () => Promise<OrchestrationReadModel>;

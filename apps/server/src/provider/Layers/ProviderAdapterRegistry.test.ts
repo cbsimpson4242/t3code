@@ -11,7 +11,7 @@ import { ProviderUnsupportedError } from "../Errors.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 const fakeCodexAdapter: CodexAdapterShape = {
-  provider: "codex",
+  provider: "openai",
   capabilities: { sessionModelSwitch: "in-session" },
   startSession: vi.fn(),
   sendTurn: vi.fn(),
@@ -41,11 +41,11 @@ layer("ProviderAdapterRegistryLive", (it) => {
   it.effect("resolves a registered provider adapter", () =>
     Effect.gen(function* () {
       const registry = yield* ProviderAdapterRegistry;
-      const codex = yield* registry.getByProvider("codex");
-      assert.equal(codex, fakeCodexAdapter);
+      const openai = yield* registry.getByProvider("openai");
+      assert.equal(openai, fakeCodexAdapter);
 
       const providers = yield* registry.listProviders();
-      assert.deepEqual(providers, ["codex"]);
+      assert.deepEqual(providers, ["openai"]);
     }),
   );
 

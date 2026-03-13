@@ -15,8 +15,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "./ui/button";
 import OfficeAgentCreateDialog from "./OfficeAgentCreateDialog";
 import OfficeAdminWindow from "./OfficeAdminWindow";
+import OfficeBrowserWindow from "./OfficeBrowserWindow";
 import OfficeThreadWindow, {
-  buildDefaultOfficeAdminWindowRect,
+  buildDefaultOfficeBrowserWindowRect,
+  getOfficeAdminWindowDefaultSize,
   buildDefaultOfficeThreadWindowRect,
   normalizeOfficeThreadWindowRect,
   type OfficeThreadWindowRect,
@@ -39,6 +41,7 @@ import {
 } from "../lib/threadLifecycle";
 import { mergeThreadsWithDrafts } from "../lib/threadDrafts";
 import { readNativeApi } from "../nativeApi";
+import { usePreviewStore } from "../previewStore";
 import { deriveWorkLogEntries } from "../session-logic";
 import { useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
@@ -73,6 +76,7 @@ import {
   readOfficePersistedState,
   writeOfficePersistedState,
 } from "../office/officePersistence";
+import { groupPreviewsByOffice } from "../office/officePreviewRouting";
 import type {
   OfficeCameraState,
   OfficeElement,
@@ -83,12 +87,43 @@ import type {
 } from "../office/officeTypes";
 
 const THOUGHT_EMOJIS = ["\u2615", "\ud83d\udca4", "\ud83d\udca1", "\ud83c\udf3f", "\ud83c\udfb5", "\ud83d\ude80", "\ud83d\udcda", "\u2728"];
-const ADMIN_DESK_WIDTH = 156;
-const ADMIN_DESK_HEIGHT = 120;
 const ADMIN_WINDOW_ACCENT = "#f59e0b";
 const OFFICE_MINIMAP_WIDTH = 224;
 const OFFICE_MINIMAP_HEIGHT = 156;
 const OFFICE_MINIMAP_PADDING = 14;
+const OFFICE_VIEWPORT_POINTER_BLOCK_SELECTOR = [
+  "[data-office-thread-window]",
+  "[data-office-browser-window]",
+  "[data-office-admin-window]",
+  "[data-office-toolbar]",
+  "[data-office-minimap]",
+  "[data-office-group]",
+  "[data-office-group-color-trigger]",
+  "[data-office-group-color-option]",
+  "[data-office-group-resize]",
+  "[data-office-element]",
+  "[data-office-desk]",
+  "[data-office-bot]",
+  "[data-office-bot-card]",
+  "[data-office-bot-thought]",
+  "[data-office-thread-link]",
+].join(", ");
+const OFFICE_VIEWPORT_CONTEXT_MENU_BLOCK_SELECTOR = [
+  "[data-office-thread-window]",
+  "[data-office-browser-window]",
+  "[data-office-admin-window]",
+  "[data-office-toolbar]",
+  "[data-office-minimap]",
+  "[data-office-group-color-trigger]",
+  "[data-office-group-color-option]",
+  "[data-office-group-resize]",
+  "[data-office-element]",
+  "[data-office-desk]",
+  "[data-office-bot]",
+  "[data-office-bot-card]",
+  "[data-office-bot-thought]",
+  "[data-office-thread-link]",
+].join(", ");
 
 const OFFICE_FURNITURE_LABELS: Record<OfficeFurnitureAddKind, string> = {
   conferenceSet: "Boardroom set",
@@ -97,6 +132,7 @@ const OFFICE_FURNITURE_LABELS: Record<OfficeFurnitureAddKind, string> = {
   chair: "Chair",
   plant: "Plant",
   coffeeBar: "Coffee machine",
+  tv: "TV",
 };
 
 interface BotState {
@@ -111,6 +147,7 @@ interface BotState {
 
 interface VirtualOfficeProps {
   onOpenThreadInMainWindow?: (threadId: ThreadId) => void;
+  focusThreadId?: ThreadId | null;
 }
 
 type PanState = {
@@ -144,13 +181,6 @@ type DragState =
     }
   | {
       pointerId: number;
-      kind: "adminDesk";
-      startPointer: OfficePoint;
-      startValue: OfficePoint;
-      moved: boolean;
-    }
-  | {
-      pointerId: number;
       kind: "desk";
       key: string;
       startPointer: OfficePoint;
@@ -169,6 +199,13 @@ type DragState =
 interface OpenOfficeThreadWindow {
   threadId: ThreadId;
   rect: OfficeThreadWindowRect;
+}
+
+interface OpenOfficeBrowserWindow {
+  groupKey: string;
+  rect: OfficeThreadWindowRect;
+  selectedPreviewId: string | null;
+  showChooser: boolean;
 }
 
 function closestPointOnRect(point: OfficePoint, rect: OfficeThreadWindowRect): OfficePoint {
@@ -391,11 +428,16 @@ function FurnitureNode(props: {
   onPointerMove: (event: React.PointerEvent<HTMLDivElement>) => void;
   onPointerUp: (event: React.PointerEvent<HTMLDivElement>) => void;
   onPointerCancel: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onClick?: (() => void) | undefined;
 }) {
   const { element } = props;
   const selectedClassName = props.isSelected
     ? "ring-2 ring-primary/70 ring-offset-2 ring-offset-background"
     : "";
+  const tvGroupKey =
+    element.type === "tv" && typeof element.metadata?.groupKey === "string"
+      ? element.metadata.groupKey
+      : undefined;
 
   if (element.type === "waterCooler") {
     return (
@@ -480,6 +522,53 @@ function FurnitureNode(props: {
     );
   }
 
+  if (element.type === "tv") {
+    return (
+      <div
+        data-office-element={element.id}
+        data-office-element-selected={props.isSelected ? "true" : undefined}
+        data-office-tv={tvGroupKey}
+        className={`absolute flex cursor-grab flex-col items-center active:cursor-grabbing ${selectedClassName}`}
+        style={{ left: element.x, top: element.y, width: element.width, height: element.height }}
+        onPointerDown={props.onPointerDown}
+        onPointerMove={props.onPointerMove}
+        onPointerUp={props.onPointerUp}
+        onPointerCancel={props.onPointerCancel}
+        onClick={props.onClick}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if ((event.key === "Enter" || event.key === " ") && props.onClick) {
+            event.preventDefault();
+            props.onClick();
+          }
+        }}
+        aria-label="Open office preview TV"
+      >
+        <div className="relative flex h-full w-full flex-col items-center">
+          <div className="relative flex h-[72px] w-full items-center justify-center rounded-[18px] border border-slate-700 bg-slate-950 shadow-[0_10px_30px_-16px_rgba(15,23,42,0.85)]">
+            <div
+              className="absolute inset-[7px] rounded-[12px] border border-slate-800"
+              style={{
+                background:
+                  "linear-gradient(135deg, rgba(34,197,94,0.16), rgba(59,130,246,0.22) 52%, rgba(15,23,42,0.88))",
+              }}
+            />
+            <div className="absolute left-3 top-3 rounded-full border border-emerald-400/30 bg-emerald-400/12 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-emerald-200">
+              Live Preview
+            </div>
+            <div className="absolute bottom-3 right-3 flex items-center gap-1 rounded-full bg-slate-950/70 px-2 py-0.5 text-[9px] font-medium text-slate-200">
+              <MonitorIcon className="size-3" />
+              TV
+            </div>
+          </div>
+          <div className="h-5 w-3 rounded-b-full bg-slate-800/90" />
+          <div className="-mt-1 h-2 w-12 rounded-full bg-slate-700/70" />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       data-office-element={element.id}
@@ -509,7 +598,10 @@ function FurnitureNode(props: {
   );
 }
 
-export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOfficeProps) {
+export default function VirtualOffice({
+  onOpenThreadInMainWindow,
+  focusThreadId = null,
+}: VirtualOfficeProps) {
   const threads = useStore((store) => store.threads);
   const projects = useStore((store) => store.projects);
   const { settings } = useAppSettings();
@@ -521,10 +613,12 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearThreadDraft);
   const clearProjectDraftThreadById = useComposerDraftStore((store) => store.clearProjectDraftThreadById);
   const clearTerminalState = useTerminalStateStore((store) => store.clearTerminalState);
+  const previewSnapshot = usePreviewStore((store) => store.snapshot);
   const queryClient = useQueryClient();
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const viewportRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<OfficePersistedState | null>(null);
+  const browserWindowRectCacheRef = useRef<Record<string, OfficeThreadWindowRect>>({});
   const persistTimerRef = useRef<number | null>(null);
   const previousViewportSizeRef = useRef({ width: 0, height: 0 });
   const suppressClickUntilRef = useRef(0);
@@ -538,8 +632,9 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
   const [hoveredBotId, setHoveredBotId] = useState<string | null>(null);
   const [isInteracting, setIsInteracting] = useState(false);
   const [openWindows, setOpenWindows] = useState<OpenOfficeThreadWindow[]>([]);
+  const [openBrowserWindows, setOpenBrowserWindows] = useState<OpenOfficeBrowserWindow[]>([]);
   const [adminWindowRect, setAdminWindowRect] = useState<OfficeThreadWindowRect | null>(null);
-  const [isAdminWindowFocused, setIsAdminWindowFocused] = useState(false);
+  const [windowStackOrder, setWindowStackOrder] = useState<string[]>([]);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [createDialogProjectId, setCreateDialogProjectId] = useState<ProjectId | null>(null);
   const [selectedFurnitureId, setSelectedFurnitureId] = useState<string | null>(null);
@@ -547,6 +642,14 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
   const camera = officeState.camera;
 
   stateRef.current = officeState;
+
+  const moveWindowTokenToFront = useCallback((token: string) => {
+    setWindowStackOrder((current) => [...current.filter((entry) => entry !== token), token]);
+  }, []);
+
+  const removeWindowToken = useCallback((token: string) => {
+    setWindowStackOrder((current) => current.filter((entry) => entry !== token));
+  }, []);
 
   const mergedThreads = useMemo(
     () =>
@@ -574,12 +677,58 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
     () => scene.furniture.find((element) => element.id === selectedFurnitureId) ?? null,
     [scene.furniture, selectedFurnitureId],
   );
+  const previewsByGroupKey = useMemo(
+    () =>
+      groupPreviewsByOffice({
+        threads: mergedThreads,
+        projects,
+        previews: previewSnapshot.previews,
+      }),
+    [mergedThreads, previewSnapshot.previews, projects],
+  );
+  const tvByGroupKey = useMemo(
+    () =>
+      new Map(
+        scene.furniture.flatMap((element) =>
+          element.type === "tv" && typeof element.metadata?.groupKey === "string"
+            ? [[element.metadata.groupKey, element] as const]
+            : [],
+        ),
+      ),
+    [scene.furniture],
+  );
+  const windowZIndices = useMemo(
+    () =>
+      new Map(
+        windowStackOrder.map((token, index) => [token, 20_000 + index] as const),
+      ),
+    [windowStackOrder],
+  );
+  const isAdminWindowFocused = windowStackOrder[windowStackOrder.length - 1] === "admin:office-admin";
 
   useEffect(() => {
     setOpenWindows((current) =>
       current.filter((windowState) => mergedThreads.some((thread) => thread.id === windowState.threadId)),
     );
   }, [mergedThreads]);
+
+  useEffect(() => {
+    const validGroupKeys = new Set(scene.groups.map((group) => group.key));
+    setOpenBrowserWindows((current) =>
+      current.filter((windowState) => validGroupKeys.has(windowState.groupKey)),
+    );
+  }, [scene.groups]);
+
+  useEffect(() => {
+    const validThreadTokens = new Set(mergedThreads.map((thread) => `thread:${thread.id}`));
+    const validBrowserTokens = new Set(scene.groups.map((group) => `browser:${group.key}`));
+    setWindowStackOrder((current) =>
+      current.filter(
+        (token) =>
+          token === "admin:office-admin" || validThreadTokens.has(token) || validBrowserTokens.has(token),
+      ),
+    );
+  }, [mergedThreads, scene.groups]);
 
   useEffect(() => {
     if (areOfficePersistedStatesEqual(officeState, normalizedPersistedState)) {
@@ -593,6 +742,58 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
       setSelectedFurnitureId(null);
     }
   }, [scene.furniture, selectedFurnitureId]);
+
+  useEffect(() => {
+    setOpenBrowserWindows((current) => {
+      let changed = false;
+      const next = current.map((windowState) => {
+        const previews = previewsByGroupKey[windowState.groupKey] ?? [];
+        const livePreviews = previews.filter((preview) => preview.status === "live");
+        const selectedPreviewExists =
+          windowState.selectedPreviewId !== null &&
+          previews.some((preview) => preview.id === windowState.selectedPreviewId);
+
+        if ((windowState.selectedPreviewId === null || !selectedPreviewExists) && livePreviews.length === 1) {
+          const previewId = livePreviews[0]!.id;
+          if (windowState.selectedPreviewId === previewId && !windowState.showChooser) {
+            return windowState;
+          }
+          changed = true;
+          return {
+            ...windowState,
+            selectedPreviewId: previewId,
+            showChooser: false,
+          };
+        }
+
+        if (windowState.selectedPreviewId === null || !selectedPreviewExists) {
+          if (livePreviews.length > 1) {
+            if (windowState.selectedPreviewId === null && windowState.showChooser) {
+              return windowState;
+            }
+            changed = true;
+            return {
+              ...windowState,
+              selectedPreviewId: null,
+              showChooser: true,
+            };
+          }
+
+          if (windowState.selectedPreviewId !== null || windowState.showChooser) {
+            changed = true;
+            return {
+              ...windowState,
+              selectedPreviewId: null,
+              showChooser: false,
+            };
+          }
+        }
+
+        return windowState;
+      });
+      return changed ? next : current;
+    });
+  }, [previewsByGroupKey]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -756,11 +957,11 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
 
   const openThreadWindow = useCallback(
     (threadId: ThreadId) => {
-      setIsAdminWindowFocused(false);
+      moveWindowTokenToFront(`thread:${threadId}`);
       setOpenWindows((current) => {
         const existing = current.find((entry) => entry.threadId === threadId);
         if (existing) {
-          return [...current.filter((entry) => entry.threadId !== threadId), existing];
+          return current;
         }
         const desk = deskByThreadId.get(threadId);
         const fallbackAnchor =
@@ -789,23 +990,25 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
         ];
       });
     },
-    [camera, deskByThreadId, viewportSize.height, viewportSize.width],
+    [camera, deskByThreadId, moveWindowTokenToFront, viewportSize.height, viewportSize.width],
   );
 
   const closeThreadWindow = useCallback((threadId: ThreadId) => {
     setOpenWindows((current) => current.filter((entry) => entry.threadId !== threadId));
-  }, []);
+    removeWindowToken(`thread:${threadId}`);
+  }, [removeWindowToken]);
 
   const focusThreadWindow = useCallback((threadId: ThreadId) => {
-    setIsAdminWindowFocused(false);
-    setOpenWindows((current) => {
-      const existing = current.find((entry) => entry.threadId === threadId);
-      if (!existing || current[current.length - 1]?.threadId === threadId) {
-        return current;
-      }
-      return [...current.filter((entry) => entry.threadId !== threadId), existing];
-    });
-  }, []);
+    moveWindowTokenToFront(`thread:${threadId}`);
+  }, [moveWindowTokenToFront]);
+
+  useEffect(() => {
+    if (!focusThreadId) {
+      return;
+    }
+    openThreadWindow(focusThreadId);
+    focusThreadWindow(focusThreadId);
+  }, [focusThreadId, focusThreadWindow, openThreadWindow]);
 
   const updateThreadWindowRect = useCallback((threadId: ThreadId, rect: OfficeThreadWindowRect) => {
     setOpenWindows((current) =>
@@ -817,32 +1020,154 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
     );
   }, []);
 
-  const openAdminWindow = useCallback(() => {
-    setIsAdminWindowFocused(true);
-    setAdminWindowRect((current) =>
-      current ??
-      buildDefaultOfficeAdminWindowRect(
-        {
-          x: officeState.adminDeskPosition.x + ADMIN_DESK_WIDTH,
-          y: officeState.adminDeskPosition.y + 32,
-        },
-        0,
-      ),
-    );
-  }, [officeState.adminDeskPosition.x, officeState.adminDeskPosition.y]);
+  const openAdminWindowAtPoint = useCallback(
+    (anchor: OfficePoint) => {
+      moveWindowTokenToFront("admin:office-admin");
+      const defaultSize = getOfficeAdminWindowDefaultSize();
+      setAdminWindowRect(
+        normalizeOfficeThreadWindowRect({
+          width: defaultSize.width,
+          height: defaultSize.height,
+          x: Math.round(anchor.x),
+          y: Math.round(anchor.y),
+        }),
+      );
+    },
+    [moveWindowTokenToFront],
+  );
 
   const closeAdminWindow = useCallback(() => {
     setAdminWindowRect(null);
-    setIsAdminWindowFocused(false);
-  }, []);
+    removeWindowToken("admin:office-admin");
+  }, [removeWindowToken]);
 
   const focusAdminWindow = useCallback(() => {
-    setIsAdminWindowFocused(true);
-  }, []);
+    moveWindowTokenToFront("admin:office-admin");
+  }, [moveWindowTokenToFront]);
 
   const updateAdminWindowRect = useCallback((rect: OfficeThreadWindowRect) => {
     setAdminWindowRect(normalizeOfficeThreadWindowRect(rect));
   }, []);
+
+  const openBrowserWindow = useCallback(
+    (groupKey: string) => {
+      moveWindowTokenToFront(`browser:${groupKey}`);
+      setOpenBrowserWindows((current) => {
+        const existing = current.find((entry) => entry.groupKey === groupKey);
+        if (existing) {
+          return current;
+        }
+
+        const group = groupByKey.get(groupKey);
+        const tv = tvByGroupKey.get(groupKey);
+        const fallbackAnchor =
+          viewportSize.width > 0 && viewportSize.height > 0
+            ? screenToWorld(
+                {
+                  x: viewportSize.width / 2,
+                  y: viewportSize.height / 2,
+                },
+                camera,
+              )
+            : { x: 0, y: 0 };
+        const anchor = tv
+          ? {
+              x: tv.x + tv.width,
+              y: tv.y + 18,
+            }
+          : group
+            ? {
+                x: group.element.x + group.element.width,
+                y: group.element.y + 32,
+              }
+            : fallbackAnchor;
+        const previews = previewsByGroupKey[groupKey] ?? [];
+        const livePreviews = previews.filter((preview) => preview.status === "live");
+
+        return [
+          ...current,
+          {
+            groupKey,
+            rect:
+              browserWindowRectCacheRef.current[groupKey] ??
+              buildDefaultOfficeBrowserWindowRect(
+                anchor,
+                current.length + openWindows.length + (adminWindowRect ? 1 : 0),
+              ),
+            selectedPreviewId: livePreviews.length === 1 ? livePreviews[0]!.id : null,
+            showChooser: livePreviews.length > 1,
+          },
+        ];
+      });
+    },
+    [
+      adminWindowRect,
+      camera,
+      groupByKey,
+      moveWindowTokenToFront,
+      openWindows.length,
+      previewsByGroupKey,
+      tvByGroupKey,
+      viewportSize.height,
+      viewportSize.width,
+    ],
+  );
+
+  const closeBrowserWindow = useCallback((groupKey: string) => {
+    setOpenBrowserWindows((current) => {
+      const existing = current.find((entry) => entry.groupKey === groupKey);
+      if (existing) {
+        browserWindowRectCacheRef.current[groupKey] = existing.rect;
+      }
+      return current.filter((entry) => entry.groupKey !== groupKey);
+    });
+    removeWindowToken(`browser:${groupKey}`);
+  }, [removeWindowToken]);
+
+  const focusBrowserWindow = useCallback((groupKey: string) => {
+    moveWindowTokenToFront(`browser:${groupKey}`);
+  }, [moveWindowTokenToFront]);
+
+  const updateBrowserWindowRect = useCallback((groupKey: string, rect: OfficeThreadWindowRect) => {
+    const nextRect = normalizeOfficeThreadWindowRect(rect);
+    browserWindowRectCacheRef.current[groupKey] = nextRect;
+    setOpenBrowserWindows((current) =>
+      current.map((entry) =>
+        entry.groupKey === groupKey
+          ? { ...entry, rect: nextRect }
+          : entry,
+      ),
+    );
+  }, []);
+
+  const selectBrowserPreview = useCallback((groupKey: string, previewId: string) => {
+    moveWindowTokenToFront(`browser:${groupKey}`);
+    setOpenBrowserWindows((current) =>
+      current.map((entry) =>
+        entry.groupKey === groupKey
+          ? {
+              ...entry,
+              selectedPreviewId: previewId,
+              showChooser: false,
+            }
+          : entry,
+      ),
+    );
+  }, [moveWindowTokenToFront]);
+
+  const showBrowserChooser = useCallback((groupKey: string) => {
+    moveWindowTokenToFront(`browser:${groupKey}`);
+    setOpenBrowserWindows((current) =>
+      current.map((entry) =>
+        entry.groupKey === groupKey
+          ? {
+              ...entry,
+              showChooser: true,
+            }
+          : entry,
+      ),
+    );
+  }, [moveWindowTokenToFront]);
 
   const openWindowConnections = useMemo(
     () =>
@@ -868,13 +1193,39 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
       }),
     [deskByThreadId, openWindows],
   );
+  const openBrowserWindowConnections = useMemo(
+    () =>
+      openBrowserWindows.flatMap((windowState) => {
+        const tv = tvByGroupKey.get(windowState.groupKey);
+        const group = groupByKey.get(windowState.groupKey);
+        const accentColor = group?.accentColor ?? "#94a3b8";
+        const sourcePointWorld = tv
+          ? {
+              x: tv.x + tv.width / 2,
+              y: tv.y + tv.height / 2,
+            }
+          : group
+            ? {
+                x: group.element.x + group.element.width,
+                y: group.element.y + 44,
+              }
+            : null;
+        if (!sourcePointWorld) {
+          return [];
+        }
+
+        return [
+          {
+            groupKey: windowState.groupKey,
+            accentColor,
+            tvPoint: sourcePointWorld,
+            windowPoint: closestPointOnRect(sourcePointWorld, windowState.rect),
+          },
+        ];
+      }),
+    [groupByKey, openBrowserWindows, tvByGroupKey],
+  );
   const minimapState = useMemo(() => {
-    const adminDeskRect = {
-      x: officeState.adminDeskPosition.x,
-      y: officeState.adminDeskPosition.y,
-      width: ADMIN_DESK_WIDTH,
-      height: ADMIN_DESK_HEIGHT,
-    };
     const viewportTopLeft =
       viewportSize.width > 0 && viewportSize.height > 0
         ? screenToWorld({ x: 0, y: 0 }, camera)
@@ -897,8 +1248,8 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
     };
     const worldBounds = unionOfficeBounds([
       scene.bounds,
-      rectToBounds(adminDeskRect),
       ...openWindows.map((windowState) => rectToBounds(windowState.rect)),
+      ...openBrowserWindows.map((windowState) => rectToBounds(windowState.rect)),
       ...(adminWindowRect ? [rectToBounds(adminWindowRect)] : []),
     ]);
     const paddedWorldBounds = {
@@ -936,7 +1287,6 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
       worldWidth,
       worldHeight,
       viewportRect: mapRect(viewportWorldRect),
-      adminDeskRect: mapRect(adminDeskRect),
       groupRects: scene.groups.map((group) => ({
         key: group.key,
         accentColor: group.accentColor,
@@ -954,8 +1304,16 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
       windowRects: openWindows.map((windowState) => {
         const desk = deskByThreadId.get(windowState.threadId);
         return {
-          threadId: windowState.threadId,
+          id: `thread:${windowState.threadId}`,
           accentColor: desk?.accentColor ?? "#94a3b8",
+          rect: mapRect(windowState.rect),
+        };
+      }),
+      browserWindowRects: openBrowserWindows.map((windowState) => {
+        const group = groupByKey.get(windowState.groupKey);
+        return {
+          id: `browser:${windowState.groupKey}`,
+          accentColor: group?.accentColor ?? "#94a3b8",
           rect: mapRect(windowState.rect),
         };
       }),
@@ -965,8 +1323,8 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
     adminWindowRect,
     camera,
     deskByThreadId,
-    officeState.adminDeskPosition.x,
-    officeState.adminDeskPosition.y,
+    groupByKey,
+    openBrowserWindows,
     openWindows,
     scene.bounds,
     scene.desks,
@@ -1195,13 +1553,6 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
 
   const shouldSuppressClick = useCallback(() => performance.now() < suppressClickUntilRef.current, []);
 
-  const handleAdminDeskClick = useCallback(() => {
-    if (shouldSuppressClick()) {
-      return;
-    }
-    openAdminWindow();
-  }, [openAdminWindow, shouldSuppressClick]);
-
   const handleThreadClick = useCallback(
     (threadId: ThreadId) => {
       if (shouldSuppressClick()) {
@@ -1210,6 +1561,16 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
       openThreadWindow(threadId);
     },
     [openThreadWindow, shouldSuppressClick],
+  );
+
+  const handleTvClick = useCallback(
+    (groupKey: string) => {
+      if (shouldSuppressClick()) {
+        return;
+      }
+      openBrowserWindow(groupKey);
+    },
+    [openBrowserWindow, shouldSuppressClick],
   );
 
   const openCreateDialog = useCallback((projectId: ProjectId | null = null) => {
@@ -1423,7 +1784,7 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
   const handleViewportPointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest("[data-office-thread-window], [data-office-admin-window], [data-office-toolbar]")) {
+      if (target?.closest(OFFICE_VIEWPORT_POINTER_BLOCK_SELECTOR)) {
         return;
       }
       if (event.button === 0) {
@@ -1450,6 +1811,27 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
       document.body.style.userSelect = "none";
     },
     [officeState.camera],
+  );
+
+  const handleViewportContextMenu = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest(OFFICE_VIEWPORT_CONTEXT_MENU_BLOCK_SELECTOR)) {
+        return;
+      }
+      event.preventDefault();
+      const viewportRect = event.currentTarget.getBoundingClientRect();
+      const worldPoint = screenToWorld(
+        {
+          x: event.clientX - viewportRect.left,
+          y: event.clientY - viewportRect.top,
+        },
+        camera,
+      );
+      setSelectedFurnitureId(null);
+      openAdminWindowAtPoint(worldPoint);
+    },
+    [camera, openAdminWindowAtPoint],
   );
 
   const handleViewportPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
@@ -1585,6 +1967,21 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
           );
         }
 
+        setOpenBrowserWindows((current) =>
+          current.map((windowState) =>
+            windowState.groupKey === dragState.key
+              ? {
+                  ...windowState,
+                  rect: {
+                    ...windowState.rect,
+                    x: windowState.rect.x + deltaX,
+                    y: windowState.rect.y + deltaY,
+                  },
+                }
+              : windowState,
+          ),
+        );
+
         setOfficeState((current) => {
           const currentAnchor = current.projectGroupAnchors[dragState.key] ?? dragState.startValue;
           if (currentAnchor.x === nextPoint.x && currentAnchor.y === nextPoint.y) {
@@ -1602,17 +1999,6 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
       }
 
       setOfficeState((current) => {
-        if (dragState.kind === "adminDesk") {
-          const currentPosition = current.adminDeskPosition;
-          if (currentPosition.x === nextPoint.x && currentPosition.y === nextPoint.y) {
-            return current;
-          }
-          return {
-            ...current,
-            adminDeskPosition: nextPoint,
-          };
-        }
-
         if (dragState.kind === "desk") {
           const currentOffset = current.deskOffsetsByThreadId[dragState.key] ?? dragState.startValue;
           if (currentOffset.x === nextPoint.x && currentOffset.y === nextPoint.y) {
@@ -1670,7 +2056,9 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
 
   const handleWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
     const target = event.target instanceof Element ? event.target : null;
-    if (target?.closest("[data-office-thread-window], [data-office-admin-window]")) {
+    if (
+      target?.closest("[data-office-thread-window], [data-office-browser-window], [data-office-admin-window]")
+    ) {
       return;
     }
 
@@ -1739,6 +2127,7 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
       onPointerMove={handleViewportPointerMove}
       onPointerUp={handleViewportPointerEnd}
       onPointerCancel={handleViewportPointerEnd}
+      onContextMenu={handleViewportContextMenu}
     >
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-linear-to-t from-background via-background/70 to-transparent" />
 
@@ -1842,7 +2231,9 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
         >
           <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between border-b border-border/60 bg-background/82 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground/75">
             <span>Mini Map</span>
-            <span className="text-muted-foreground">{openWindows.length} windows</span>
+            <span className="text-muted-foreground">
+              {openWindows.length + openBrowserWindows.length + (adminWindowRect ? 1 : 0)} windows
+            </span>
           </div>
           <svg
             className="absolute inset-0"
@@ -1871,21 +2262,10 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
                 strokeWidth={1.6}
               />
             ))}
-            <rect
-              data-office-minimap-admin="office-admin"
-              x={minimapState.adminDeskRect.x}
-              y={minimapState.adminDeskRect.y}
-              width={minimapState.adminDeskRect.width}
-              height={minimapState.adminDeskRect.height}
-              rx={6}
-              fill="rgba(245, 158, 11, 0.22)"
-              stroke="rgba(245, 158, 11, 0.9)"
-              strokeWidth={1.4}
-            />
             {minimapState.windowRects.map((windowRect) => (
               <rect
-                key={windowRect.threadId}
-                data-office-minimap-window={windowRect.threadId}
+                key={windowRect.id}
+                data-office-minimap-window={windowRect.id}
                 x={windowRect.rect.x}
                 y={windowRect.rect.y}
                 width={windowRect.rect.width}
@@ -1895,6 +2275,21 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
                 stroke={windowRect.accentColor}
                 strokeWidth={1.5}
                 strokeDasharray="4 4"
+              />
+            ))}
+            {minimapState.browserWindowRects.map((windowRect) => (
+              <rect
+                key={windowRect.id}
+                data-office-minimap-window={windowRect.id}
+                x={windowRect.rect.x}
+                y={windowRect.rect.y}
+                width={windowRect.rect.width}
+                height={windowRect.rect.height}
+                rx={5}
+                fill="rgba(255,255,255,0.03)"
+                stroke={windowRect.accentColor}
+                strokeWidth={1.5}
+                strokeDasharray="6 6"
               />
             ))}
             {minimapState.adminWindowRect ? (
@@ -1947,63 +2342,6 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
           transformOrigin: "0 0",
         }}
       >
-        <div
-          data-office-admin-desk="office-admin"
-          className="absolute flex cursor-pointer flex-col items-center"
-          style={{
-            left: officeState.adminDeskPosition.x,
-            top: officeState.adminDeskPosition.y,
-            width: ADMIN_DESK_WIDTH,
-            height: ADMIN_DESK_HEIGHT,
-          }}
-          onPointerDown={(event) =>
-            beginDrag(event, {
-              pointerId: event.pointerId,
-              kind: "adminDesk",
-              startPointer: { x: event.clientX, y: event.clientY },
-              startValue: officeState.adminDeskPosition,
-              moved: false,
-            })
-          }
-          onPointerMove={handleDragPointerMove}
-          onPointerUp={handleDragPointerEnd}
-          onPointerCancel={handleDragPointerEnd}
-          onClick={handleAdminDeskClick}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              handleAdminDeskClick();
-            }
-          }}
-          aria-label="Open CEO office administration window"
-        >
-          <div className="mb-1 rounded-full border border-amber-400/40 bg-background/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-200 shadow-sm">
-            CEO Office
-          </div>
-          <div className="relative flex flex-col items-center">
-            <div className="absolute -top-3 right-[-10px] rounded-full border border-border/70 bg-background/90 px-2 py-0.5 text-[10px] text-muted-foreground shadow-sm">
-              {projects.length} projects
-            </div>
-            <div className="flex h-10 w-14 items-center justify-center rounded-md border border-amber-300/50 bg-amber-900/35 shadow-[0_0_0_1px_rgba(245,158,11,0.16)]">
-              <MonitorIcon className="size-5 text-amber-200" />
-            </div>
-            <div className="h-1.5 w-1 bg-amber-100/20" />
-            <div className="h-0.5 w-5 rounded bg-amber-100/20" />
-          </div>
-          <div className="mt-1 flex items-center gap-1 rounded-md border border-border/60 bg-background/90 px-2 py-1 text-[10px] text-muted-foreground shadow-sm">
-            <FolderIcon className="size-3 text-foreground/70" />
-            Admin controls
-          </div>
-          <div className="mt-1 h-3 w-24 rounded-sm border-t border-amber-800/40 bg-amber-900/30" />
-          <div className="-mt-px flex w-[84px] justify-between">
-            <div className="h-3 w-1 bg-amber-900/25" />
-            <div className="h-3 w-1 bg-amber-900/25" />
-          </div>
-          <div className="mt-1 h-6 w-10 rounded-t-lg border border-slate-500/20 bg-slate-600/20" />
-        </div>
-
         {scene.groups.map((group) => (
           <div
             key={group.key}
@@ -2202,26 +2540,34 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
           </div>
         ))}
 
-        {scene.furniture.map((element) => (
-          <FurnitureNode
-            key={element.id}
-            element={element}
-            isSelected={selectedFurnitureId === element.id}
-            onPointerDown={(event) =>
-              beginDrag(event, {
-                pointerId: event.pointerId,
-                kind: "element",
-                key: element.id,
-                startPointer: { x: event.clientX, y: event.clientY },
-                startValue: { x: element.x, y: element.y },
-                moved: false,
-              })
-            }
-            onPointerMove={handleDragPointerMove}
-            onPointerUp={handleDragPointerEnd}
-            onPointerCancel={handleDragPointerEnd}
-          />
-        ))}
+        {scene.furniture.map((element) => {
+          const tvGroupKey =
+            element.type === "tv" && typeof element.metadata?.groupKey === "string"
+              ? element.metadata.groupKey
+              : null;
+
+          return (
+            <FurnitureNode
+              key={element.id}
+              element={element}
+              isSelected={selectedFurnitureId === element.id}
+              onPointerDown={(event) =>
+                beginDrag(event, {
+                  pointerId: event.pointerId,
+                  kind: "element",
+                  key: element.id,
+                  startPointer: { x: event.clientX, y: event.clientY },
+                  startValue: { x: element.x, y: element.y },
+                  moved: false,
+                })
+              }
+              onPointerMove={handleDragPointerMove}
+              onPointerUp={handleDragPointerEnd}
+              onPointerCancel={handleDragPointerEnd}
+              onClick={tvGroupKey ? () => handleTvClick(tvGroupKey) : undefined}
+            />
+          );
+        })}
 
         {scene.desks.map((desk) => (
           <div
@@ -2523,6 +2869,35 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
                 />
               </g>
             ))}
+            {openBrowserWindowConnections.map((connection) => (
+              <g key={connection.groupKey} data-office-browser-link={connection.groupKey}>
+                <line
+                  x1={connection.tvPoint.x}
+                  y1={connection.tvPoint.y}
+                  x2={connection.windowPoint.x}
+                  y2={connection.windowPoint.y}
+                  stroke={connection.accentColor}
+                  strokeOpacity="0.72"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeDasharray="6 8"
+                />
+                <circle
+                  cx={connection.tvPoint.x}
+                  cy={connection.tvPoint.y}
+                  r="4.5"
+                  fill={connection.accentColor}
+                  fillOpacity="0.9"
+                />
+                <circle
+                  cx={connection.windowPoint.x}
+                  cy={connection.windowPoint.y}
+                  r="4.5"
+                  fill={connection.accentColor}
+                  fillOpacity="0.9"
+                />
+              </g>
+            ))}
         </svg>
 
         {openWindows.map((windowState, index) => {
@@ -2537,8 +2912,8 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
               threadId={windowState.threadId}
               rect={windowState.rect}
               zoom={camera.zoom}
-              zIndex={20_000 + index}
-              isFocused={index === openWindows.length - 1}
+              zIndex={windowZIndices.get(`thread:${windowState.threadId}`) ?? 19_000 + index}
+              isFocused={isAdminWindowFocused ? false : windowStackOrder[windowStackOrder.length - 1] === `thread:${windowState.threadId}`}
               accentColor={desk.accentColor}
               projects={projects}
               threads={mergedThreads}
@@ -2552,11 +2927,39 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
           );
         })}
 
+        {openBrowserWindows.map((windowState, index) => {
+          const group = groupByKey.get(windowState.groupKey);
+          if (!group) {
+            return null;
+          }
+
+          return (
+            <OfficeBrowserWindow
+              key={windowState.groupKey}
+              groupKey={windowState.groupKey}
+              groupLabel={group.label}
+              rect={windowState.rect}
+              zoom={camera.zoom}
+              zIndex={windowZIndices.get(`browser:${windowState.groupKey}`) ?? 19_500 + index}
+              isFocused={windowStackOrder[windowStackOrder.length - 1] === `browser:${windowState.groupKey}`}
+              accentColor={group.accentColor}
+              previews={previewsByGroupKey[windowState.groupKey] ?? []}
+              selectedPreviewId={windowState.selectedPreviewId}
+              showChooser={windowState.showChooser}
+              onClose={() => closeBrowserWindow(windowState.groupKey)}
+              onFocus={() => focusBrowserWindow(windowState.groupKey)}
+              onRectChange={(rect) => updateBrowserWindowRect(windowState.groupKey, rect)}
+              onSelectPreview={(previewId) => selectBrowserPreview(windowState.groupKey, previewId)}
+              onShowChooser={() => showBrowserChooser(windowState.groupKey)}
+            />
+          );
+        })}
+
         {adminWindowRect ? (
           <OfficeAdminWindow
             rect={adminWindowRect}
             zoom={camera.zoom}
-            zIndex={isAdminWindowFocused ? 20_000 + openWindows.length + 1 : 19_999}
+            zIndex={windowZIndices.get("admin:office-admin") ?? 19_999}
             isFocused={isAdminWindowFocused}
             accentColor={ADMIN_WINDOW_ACCENT}
             projects={projects}

@@ -5,7 +5,8 @@ export type OfficeElementType =
   | "conferenceTable"
   | "chair"
   | "plant"
-  | "coffeeBar";
+  | "coffeeBar"
+  | "tv";
 
 export type OfficeFurnitureType = Exclude<OfficeElementType, "projectGroup" | "desk">;
 

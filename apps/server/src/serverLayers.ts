@@ -35,6 +35,7 @@ import { GitServiceLive } from "./git/Layers/GitService";
 import { BunPtyAdapterLive } from "./terminal/Layers/BunPTY";
 import { NodePtyAdapterLive } from "./terminal/Layers/NodePTY";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
+import { PreviewRegistryLive } from "./preview/Layers/Registry";
 
 export function makeServerProviderLayer(): Layer.Layer<
   ProviderService,
@@ -112,6 +113,7 @@ export function makeServerRuntimeServicesLayer() {
         : NodePtyAdapterLive,
     ),
   );
+  const previewLayer = PreviewRegistryLive.pipe(Layer.provideMerge(terminalLayer));
 
   const gitManagerLayer = GitManagerLive.pipe(
     Layer.provideMerge(gitCoreLayer),
@@ -124,6 +126,7 @@ export function makeServerRuntimeServicesLayer() {
     gitCoreLayer,
     gitManagerLayer,
     terminalLayer,
+    previewLayer,
     KeybindingsLive,
   ).pipe(Layer.provideMerge(NodeServices.layer));
 }

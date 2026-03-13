@@ -119,6 +119,8 @@ function nextDeskOffset(existingOffsets: OfficePoint[]): OfficePoint {
   };
 }
 
+const TV_FURNITURE_SEEDED_PREFIX = "tv:";
+
 function clonePersistedFurniture(furniture: OfficePersistedFurniture): OfficePersistedFurniture {
   return {
     id: furniture.id,
@@ -244,14 +246,43 @@ export function buildOfficeScene(input: {
     nextProjectGroupAnchors[group.key] = nextGroupAnchor(Object.values(nextProjectGroupAnchors));
   }
 
-  const seededGroupKeys = new Set(input.persistedState.defaultFurnitureSeededGroupKeys);
+  const seededGroupKeys = new Set(
+    input.persistedState.defaultFurnitureSeededGroupKeys.filter(
+      (entry) => !entry.startsWith(TV_FURNITURE_SEEDED_PREFIX),
+    ),
+  );
+  const tvSeededGroupKeys = new Set(
+    input.persistedState.defaultFurnitureSeededGroupKeys.flatMap((entry) =>
+      entry.startsWith(TV_FURNITURE_SEEDED_PREFIX)
+        ? [entry.slice(TV_FURNITURE_SEEDED_PREFIX.length)]
+        : [],
+    ),
+  );
   const nextPersistedFurniture = input.persistedState.furniture.map(clonePersistedFurniture);
   for (const group of input.groups) {
-    if (seededGroupKeys.has(group.key)) {
+    const groupHasPersistedTv = nextPersistedFurniture.some(
+      (element) =>
+        element.type === "tv" &&
+        element.placement.kind === "groupLinked" &&
+        element.placement.groupKey === group.key,
+    );
+
+    if (!seededGroupKeys.has(group.key)) {
+      nextPersistedFurniture.push(...createDefaultOfficeFurnitureForGroup(group.key, nextPersistedFurniture));
+      seededGroupKeys.add(group.key);
+      tvSeededGroupKeys.add(group.key);
       continue;
     }
-    nextPersistedFurniture.push(...createDefaultOfficeFurnitureForGroup(group.key, nextPersistedFurniture));
-    seededGroupKeys.add(group.key);
+
+    if (!tvSeededGroupKeys.has(group.key)) {
+      if (!groupHasPersistedTv) {
+        const tvFurniture = createDefaultOfficeFurnitureForGroup(group.key, nextPersistedFurniture).filter(
+          (element) => element.type === "tv",
+        );
+        nextPersistedFurniture.push(...tvFurniture);
+      }
+      tvSeededGroupKeys.add(group.key);
+    }
   }
 
   const resolvedFurniture = resolveOfficeFurniture({
@@ -390,7 +421,10 @@ export function buildOfficeScene(input: {
       deskOffsetsByThreadId: nextDeskOffsetsByThreadId,
       groupAccentColorsByKey: { ...input.persistedState.groupAccentColorsByKey },
       adminDeskPosition: { ...input.persistedState.adminDeskPosition },
-      defaultFurnitureSeededGroupKeys: [...seededGroupKeys],
+      defaultFurnitureSeededGroupKeys: [
+        ...seededGroupKeys,
+        ...[...tvSeededGroupKeys].map((groupKey) => `${TV_FURNITURE_SEEDED_PREFIX}${groupKey}`),
+      ],
     },
     scene: {
       groups: groupScenes,

@@ -39,7 +39,7 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
-const PROVIDER = "codex" as const;
+const PROVIDER = "openai" as const;
 
 export interface CodexAdapterLiveOptions {
   readonly manager?: CodexAppServerManager;
@@ -1354,8 +1354,10 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               threadId: input.threadId,
               ...(input.input !== undefined ? { input: input.input } : {}),
               ...(input.model !== undefined ? { model: input.model } : {}),
-              ...(input.modelOptions?.codex?.reasoningEffort !== undefined
-                ? { effort: input.modelOptions.codex.reasoningEffort }
+              ...(input.modelOptions?.openai?.reasoningEffort !== undefined
+                ? { effort: input.modelOptions.openai.reasoningEffort }
+                : input.modelOptions?.codex?.reasoningEffort !== undefined
+                  ? { effort: input.modelOptions.codex.reasoningEffort }
                 : {}),
               ...(input.modelOptions?.codex?.fastMode ? { serviceTier: "fast" } : {}),
               ...(input.interactionMode !== undefined

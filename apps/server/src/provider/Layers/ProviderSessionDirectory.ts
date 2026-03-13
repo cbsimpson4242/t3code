@@ -25,8 +25,11 @@ function decodeProviderKind(
   providerName: string,
   operation: string,
 ): Effect.Effect<ProviderKind, ProviderSessionDirectoryPersistenceError> {
-  if (providerName === "codex") {
+  if (providerName === "openai") {
     return Effect.succeed(providerName);
+  }
+  if (providerName === "codex") {
+    return Effect.succeed("openai");
   }
   return Effect.fail(
     new ProviderSessionDirectoryPersistenceError({

@@ -24,7 +24,7 @@ import {
 import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHealth";
 
 const DEFAULT_TIMEOUT_MS = 4_000;
-const CODEX_PROVIDER = "codex" as const;
+const OPENAI_PROVIDER = "openai" as const;
 
 // ── Pure helpers ────────────────────────────────────────────────────
 
@@ -102,7 +102,7 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     return {
       status: "warning",
       authStatus: "unknown",
-      message: "Codex CLI authentication status command is unavailable in this Codex version.",
+      message: "OpenAI bridge auth status is unavailable in this Codex bridge version.",
     };
   }
 
@@ -116,7 +116,7 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     return {
       status: "error",
       authStatus: "unauthenticated",
-      message: "Codex CLI is not authenticated. Run `codex login` and try again.",
+      message: "OpenAI bridge is not authenticated. Run `codex login` and try again.",
     };
   }
 
@@ -142,7 +142,7 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     return {
       status: "error",
       authStatus: "unauthenticated",
-      message: "Codex CLI is not authenticated. Run `codex login` and try again.",
+      message: "OpenAI bridge is not authenticated. Run `codex login` and try again.",
     };
   }
   if (parsedAuth.attemptedJsonParse) {
@@ -150,7 +150,7 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
       status: "warning",
       authStatus: "unknown",
       message:
-        "Could not verify Codex authentication status from JSON output (missing auth marker).",
+        "Could not verify OpenAI bridge authentication status from JSON output (missing auth marker).",
     };
   }
   if (result.code === 0) {
@@ -162,8 +162,8 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     status: "warning",
     authStatus: "unknown",
     message: detail
-      ? `Could not verify Codex authentication status. ${detail}`
-      : "Could not verify Codex authentication status.",
+      ? `Could not verify OpenAI bridge authentication status. ${detail}`
+      : "Could not verify OpenAI bridge authentication status.",
   };
 }
 
@@ -215,25 +215,25 @@ export const checkCodexProviderStatus: Effect.Effect<
   if (Result.isFailure(versionProbe)) {
     const error = versionProbe.failure;
     return {
-      provider: CODEX_PROVIDER,
+      provider: OPENAI_PROVIDER,
       status: "error" as const,
       available: false,
       authStatus: "unknown" as const,
       checkedAt,
       message: isCommandMissingCause(error)
-        ? "Codex CLI (`codex`) is not installed or not on PATH."
-        : `Failed to execute Codex CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+        ? "OpenAI bridge requires Codex CLI (`codex`) on PATH."
+        : `Failed to execute OpenAI bridge health check: ${error instanceof Error ? error.message : String(error)}.`,
     };
   }
 
   if (Option.isNone(versionProbe.success)) {
     return {
-      provider: CODEX_PROVIDER,
+      provider: OPENAI_PROVIDER,
       status: "error" as const,
       available: false,
       authStatus: "unknown" as const,
       checkedAt,
-      message: "Codex CLI is installed but failed to run. Timed out while running command.",
+      message: "OpenAI bridge is installed but failed to run. Timed out while running command.",
     };
   }
 
@@ -241,21 +241,21 @@ export const checkCodexProviderStatus: Effect.Effect<
   if (version.code !== 0) {
     const detail = detailFromResult(version);
     return {
-      provider: CODEX_PROVIDER,
+      provider: OPENAI_PROVIDER,
       status: "error" as const,
       available: false,
       authStatus: "unknown" as const,
       checkedAt,
       message: detail
-        ? `Codex CLI is installed but failed to run. ${detail}`
-        : "Codex CLI is installed but failed to run.",
+        ? `OpenAI bridge is installed but failed to run. ${detail}`
+        : "OpenAI bridge is installed but failed to run.",
     };
   }
 
   const parsedVersion = parseCodexCliVersion(`${version.stdout}\n${version.stderr}`);
   if (parsedVersion && !isCodexCliVersionSupported(parsedVersion)) {
     return {
-      provider: CODEX_PROVIDER,
+      provider: OPENAI_PROVIDER,
       status: "error" as const,
       available: false,
       authStatus: "unknown" as const,
@@ -273,32 +273,32 @@ export const checkCodexProviderStatus: Effect.Effect<
   if (Result.isFailure(authProbe)) {
     const error = authProbe.failure;
     return {
-      provider: CODEX_PROVIDER,
+      provider: OPENAI_PROVIDER,
       status: "warning" as const,
       available: true,
       authStatus: "unknown" as const,
       checkedAt,
       message:
         error instanceof Error
-          ? `Could not verify Codex authentication status: ${error.message}.`
-          : "Could not verify Codex authentication status.",
+          ? `Could not verify OpenAI bridge authentication status: ${error.message}.`
+          : "Could not verify OpenAI bridge authentication status.",
     };
   }
 
   if (Option.isNone(authProbe.success)) {
     return {
-      provider: CODEX_PROVIDER,
+      provider: OPENAI_PROVIDER,
       status: "warning" as const,
       available: true,
       authStatus: "unknown" as const,
       checkedAt,
-      message: "Could not verify Codex authentication status. Timed out while running command.",
+      message: "Could not verify OpenAI bridge authentication status. Timed out while running command.",
     };
   }
 
   const parsed = parseAuthStatusFromOutput(authProbe.success.value);
   return {
-    provider: CODEX_PROVIDER,
+    provider: OPENAI_PROVIDER,
     status: parsed.status,
     available: true,
     authStatus: parsed.authStatus,

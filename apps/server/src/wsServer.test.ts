@@ -51,6 +51,8 @@ import { GitCore } from "./git/Services/GitCore.ts";
 import { GitCommandError, GitManagerError } from "./git/Errors.ts";
 import { MigrationError } from "@effect/sql-sqlite-bun/SqliteMigrator";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
+import { PreviewRegistry, type PreviewRegistryShape } from "./preview/Services/Registry";
+import { PreviewRegistryRuntime } from "./preview/Layers/Registry";
 
 interface PendingMessages {
   queue: unknown[];
@@ -396,6 +398,7 @@ describe("WebSocket Server", () => {
       gitManager?: GitManagerShape;
       gitCore?: Pick<GitCoreShape, "listBranches" | "initRepo" | "pullCurrentBranch">;
       terminalManager?: TerminalManagerShape;
+      previewRegistry?: PreviewRegistryShape;
     } = {},
   ): Promise<Http.Server> {
     if (serverScope) {
@@ -434,6 +437,7 @@ describe("WebSocket Server", () => {
       options.terminalManager
         ? Layer.succeed(TerminalManager, options.terminalManager)
         : Layer.empty,
+      options.previewRegistry ? Layer.succeed(PreviewRegistry, options.previewRegistry) : Layer.empty,
     );
 
     const runtimeLayer = Layer.merge(
@@ -1350,6 +1354,92 @@ describe("WebSocket Server", () => {
     server = null;
 
     expect(terminalManager.subscriptionCount()).toBe(0);
+  });
+
+  it("serves preview snapshots and broadcasts preview updates", async () => {
+    const cwd = makeTempDir("t3code-ws-preview-cwd-");
+    const terminalManager = new MockTerminalManager();
+    const previewRegistry = new PreviewRegistryRuntime();
+    const unsubscribePreviewRuntime = Effect.runSync(
+      terminalManager.subscribe((event) => {
+        previewRegistry.handleTerminalEvent(event);
+      }),
+    );
+    server = await createTestServer({
+      cwd: "/test",
+      terminalManager,
+      previewRegistry,
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const ws = await connectWs(port);
+    connections.push(ws);
+    await waitForMessage(ws);
+
+    const initial = await sendRequest(ws, WS_METHODS.previewGetSnapshot);
+    expect(initial.error).toBeUndefined();
+    expect(initial.result).toEqual({ previews: [] });
+
+    terminalManager.emitEvent({
+      type: "started",
+      threadId: "thread-1",
+      terminalId: DEFAULT_TERMINAL_ID,
+      createdAt: "2026-03-13T10:00:00.000Z",
+      snapshot: {
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        cwd,
+        status: "running",
+        pid: 4545,
+        history: "ready at http://0.0.0.0:5173",
+        exitCode: null,
+        exitSignal: null,
+        updatedAt: "2026-03-13T10:00:00.000Z",
+      },
+    });
+
+    const startedPush = await waitForPush(
+      ws,
+      WS_CHANNELS.previewSnapshot,
+      (push) => ((push.data as { previews?: unknown[] }).previews?.length ?? 0) === 1,
+    );
+    expect(startedPush.data).toEqual({
+      previews: [
+        expect.objectContaining({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          cwd,
+          url: "http://127.0.0.1:5173/",
+          normalizedUrl: "http://127.0.0.1:5173/",
+          status: "live",
+        }),
+      ],
+    });
+
+    const snapshot = await sendRequest(ws, WS_METHODS.previewGetSnapshot);
+    expect(snapshot.error).toBeUndefined();
+    expect(snapshot.result).toEqual(startedPush.data);
+
+    terminalManager.emitEvent({
+      type: "activity",
+      threadId: "thread-1",
+      terminalId: DEFAULT_TERMINAL_ID,
+      createdAt: "2026-03-13T10:01:00.000Z",
+      hasRunningSubprocess: false,
+    });
+
+    const offlinePush = await waitForPush(
+      ws,
+      WS_CHANNELS.previewSnapshot,
+      (push) =>
+        (push.data as { previews: Array<{ status: string }> }).previews[0]?.status === "unavailable",
+    );
+    expect((offlinePush.data as { previews: Array<{ status: string }> }).previews[0]?.status).toBe(
+      "unavailable",
+    );
+
+    unsubscribePreviewRuntime();
   });
 
   it("returns validation errors for invalid terminal open params", async () => {

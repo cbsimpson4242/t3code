@@ -188,10 +188,10 @@ function toLegacySessionStatus(
 }
 
 function toLegacyProvider(providerName: string | null): ProviderKind {
-  if (providerName === "codex") {
+  if (providerName === "openai" || providerName === "codex") {
     return providerName;
   }
-  return "codex";
+  return "openai";
 }
 
 const CODEX_MODEL_SLUGS = new Set<string>(getModelOptions("codex").map((option) => option.slug));
@@ -200,14 +200,21 @@ function inferProviderForThreadModel(input: {
   readonly model: string;
   readonly sessionProviderName: string | null;
 }): ProviderKind {
-  if (input.sessionProviderName === "codex") {
+  if (input.sessionProviderName === "openai") {
     return input.sessionProviderName;
+  }
+  if (input.sessionProviderName === "codex") {
+    return "openai";
+  }
+  const normalizedOpenAI = normalizeModelSlug(input.model, "openai");
+  if (normalizedOpenAI && getModelOptions("openai").some((option) => option.slug === normalizedOpenAI)) {
+    return "openai";
   }
   const normalizedCodex = normalizeModelSlug(input.model, "codex");
   if (normalizedCodex && CODEX_MODEL_SLUGS.has(normalizedCodex)) {
-    return "codex";
+    return "openai";
   }
-  return "codex";
+  return "openai";
 }
 
 function resolveWsHttpOrigin(): string {

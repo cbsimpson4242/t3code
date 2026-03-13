@@ -24,13 +24,13 @@ const MODE_ARGS = {
     "dev",
     "--ui=tui",
     "--filter=@t3tools/contracts",
-    "--filter=@t3tools/web",
+    "--filter=@t3tools/openai-web",
     "--filter=t3",
     "--parallel",
   ],
   "dev:server": ["run", "dev", "--filter=t3"],
-  "dev:web": ["run", "dev", "--filter=@t3tools/web"],
-  "dev:desktop": ["run", "dev", "--filter=@t3tools/desktop", "--filter=@t3tools/web", "--parallel"],
+  "dev:web": ["run", "dev", "--filter=@t3tools/openai-web"],
+  "dev:desktop": ["run", "dev", "--filter=@t3tools/desktop", "--filter=@t3tools/openai-web", "--parallel"],
 } as const satisfies Record<string, ReadonlyArray<string>>;
 
 type DevMode = keyof typeof MODE_ARGS;

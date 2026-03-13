@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createDefaultOfficeFurnitureForGroup,
   createOfficeFurniture,
+  getDefaultOfficeFurnitureFootprint,
   moveOfficeFurnitureWithChildren,
   removeOfficeFurniture,
   resolveOfficeFurniture,
@@ -45,8 +46,16 @@ describe("officeFurniture", () => {
     expect(placementsById.get("group:group-a:water-cooler")).toEqual({ x: 18, y: 184 });
     expect(placementsById.get("group:group-a:conference-table")).toEqual({ x: 118, y: 286 });
     expect(placementsById.get("group:group-a:coffee-bar")).toEqual({ x: 386, y: 166 });
+    expect(placementsById.get("group:group-a:tv")).toEqual({ x: 372, y: 44 });
     expect(placementsById.get("group:group-a:plant-left")).toEqual({ x: 26, y: 426 });
     expect(placementsById.get("group:group-a:plant-right")).toEqual({ x: 402, y: 426 });
+  });
+
+  it("includes the seeded TV in the default office footprint", () => {
+    expect(getDefaultOfficeFurnitureFootprint()).toEqual({
+      minWidth: 522,
+      minHeight: 530,
+    });
   });
 
   it("moves linked children when a linked parent moves", () => {

@@ -377,6 +377,7 @@ function resolveDesktopStaticDir(): string | null {
   const appRoot = resolveAppRoot();
   const candidates = [
     Path.join(appRoot, "apps/server/dist/client"),
+    Path.join(appRoot, "apps/openai-web/dist"),
     Path.join(appRoot, "apps/web/dist"),
   ];
 

@@ -101,7 +101,8 @@ function isOfficeFurnitureType(value: unknown): value is OfficePersistedFurnitur
     value === "conferenceTable" ||
     value === "chair" ||
     value === "plant" ||
-    value === "coffeeBar"
+    value === "coffeeBar" ||
+    value === "tv"
   );
 }
 

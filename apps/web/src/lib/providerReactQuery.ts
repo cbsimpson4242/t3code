@@ -17,6 +17,7 @@ interface CheckpointDiffQueryInput {
 
 export const providerQueryKeys = {
   all: ["providers"] as const,
+  runtimeCatalog: ["providers", "runtimeCatalog"] as const,
   checkpointDiff: (input: CheckpointDiffQueryInput) =>
     [
       "providers",
@@ -27,6 +28,14 @@ export const providerQueryKeys = {
       input.cacheScope ?? null,
     ] as const,
 };
+
+export function runtimeCatalogQueryOptions() {
+  return queryOptions({
+    queryKey: providerQueryKeys.runtimeCatalog,
+    queryFn: () => ensureNativeApi().runtime.getCatalog(),
+    staleTime: 30_000,
+  });
+}
 
 function decodeCheckpointDiffRequest(input: CheckpointDiffQueryInput) {
   if (input.fromTurnCount === 0) {

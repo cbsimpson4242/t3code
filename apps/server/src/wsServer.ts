@@ -17,6 +17,7 @@ import {
   type OrchestrationCommand,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
+  type PreviewSnapshot,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   ProjectId,
   ThreadId,
@@ -74,6 +75,8 @@ import {
 import { parseBase64DataUrl } from "./imageMime.ts";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import { expandHomePath } from "./os-jank.ts";
+import { PreviewRegistry } from "./preview/Services/Registry";
+import { buildRuntimeCatalog } from "./runtimeCatalog.ts";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -216,6 +219,7 @@ export type ServerRuntimeServices =
   | GitManager
   | GitCore
   | TerminalManager
+  | PreviewRegistry
   | Keybindings
   | Open
   | AnalyticsService;
@@ -256,6 +260,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const keybindingsManager = yield* Keybindings;
   const providerHealth = yield* ProviderHealth;
   const git = yield* GitCore;
+  const previewRegistry = yield* PreviewRegistry;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
@@ -299,6 +304,14 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       type: "push",
       channel: WS_CHANNELS.terminalEvent,
       data: event,
+    });
+  });
+
+  const onPreviewSnapshot = Effect.fnUntraced(function* (snapshot: PreviewSnapshot) {
+    yield* broadcastPush({
+      type: "push",
+      channel: WS_CHANNELS.previewSnapshot,
+      data: snapshot,
     });
   });
 
@@ -618,17 +631,26 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
   // Push updated provider statuses to connected clients once background health checks finish.
   let providers: ReadonlyArray<ServerProviderStatus> = [];
+  let runtimeCatalog = buildRuntimeCatalog(providers);
   yield* providerHealth.getStatuses.pipe(
     Effect.flatMap((statuses) => {
       providers = statuses;
-      return broadcastPush({
-        type: "push",
-        channel: WS_CHANNELS.serverConfigUpdated,
-        data: {
-          issues: [],
-          providers: statuses,
-        },
-      });
+      runtimeCatalog = buildRuntimeCatalog(statuses);
+      return Effect.all([
+        broadcastPush({
+          type: "push",
+          channel: WS_CHANNELS.serverConfigUpdated,
+          data: {
+            issues: [],
+            providers: statuses,
+          },
+        }),
+        broadcastPush({
+          type: "push",
+          channel: WS_CHANNELS.runtimeCatalogUpdated,
+          data: runtimeCatalog,
+        }),
+      ]).pipe(Effect.asVoid);
     }),
     Effect.forkIn(subscriptionsScope),
   );
@@ -726,6 +748,10 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     (event) => void Effect.runPromise(onTerminalEvent(event)),
   );
   yield* Effect.addFinalizer(() => Effect.sync(() => unsubscribeTerminalEvents()));
+  const unsubscribePreviewSnapshots = yield* previewRegistry.subscribe(
+    (snapshot) => void Effect.runPromise(onPreviewSnapshot(snapshot)),
+  );
+  yield* Effect.addFinalizer(() => Effect.sync(() => unsubscribePreviewSnapshots()));
 
   yield* NodeHttpServer.make(() => httpServer, listenOptions).pipe(
     Effect.mapError((cause) => new ServerLifecycleError({ operation: "httpServerListen", cause })),
@@ -902,6 +928,12 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           providers,
           availableEditors,
         };
+
+      case WS_METHODS.previewGetSnapshot:
+        return yield* previewRegistry.getSnapshot();
+
+      case WS_METHODS.runtimeGetCatalog:
+        return runtimeCatalog;
 
       case WS_METHODS.serverUpsertKeybinding: {
         const body = stripRequestTag(request.body);
