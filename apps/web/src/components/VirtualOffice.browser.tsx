@@ -410,6 +410,16 @@ function getBrowserWindow(groupKey: string): HTMLElement {
   return element;
 }
 
+function getOfficeNotification(threadId: string, kind: "attention" | "success"): HTMLElement {
+  const element = document.querySelector<HTMLElement>(
+    `[data-office-notification-thread='${threadId}'][data-office-notification-kind='${kind}']`,
+  );
+  if (!element) {
+    throw new Error(`Missing office notification for ${threadId} (${kind})`);
+  }
+  return element;
+}
+
 function expectWindowToUseSize(element: HTMLElement, size: { width: number; height: number }) {
   expect(element.style.width).toBe(`${size.width}px`);
   expect(element.style.height).toBe(`${size.height}px`);
@@ -828,6 +838,115 @@ describe("VirtualOffice interactions", () => {
       await waitForOfficeLayout();
       const thoughtBubble = document.querySelector<HTMLElement>("[data-office-bot-thought='thread-a']");
       expect(thoughtBubble?.textContent).toContain("Inspecting repository state");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows an office notification when an agent starts waiting for user input", async () => {
+    const mounted = await mountOffice();
+    try {
+      useStore.setState((state) => ({
+        ...state,
+        threads: state.threads.map((thread) =>
+          thread.id !== ThreadId.makeUnsafe("thread-a")
+            ? thread
+            : {
+                ...thread,
+                activities: [
+                  ...thread.activities,
+                  {
+                    id: EventId.makeUnsafe("activity-office-user-input"),
+                    kind: "user-input.requested",
+                    tone: "info",
+                    summary: "User input requested",
+                    payload: {
+                      requestId: "req-office-user-input",
+                      questions: [
+                        {
+                          id: "reply",
+                          header: "Reply",
+                          question: "Should I continue with the deploy step?",
+                          options: [{ label: "Yes", description: "Continue execution" }],
+                        },
+                      ],
+                    },
+                    turnId: TurnId.makeUnsafe("turn-office-user-input"),
+                    createdAt: "2026-03-10T00:00:05.000Z",
+                  },
+                ],
+              },
+        ),
+      }));
+
+      await vi.waitFor(() => {
+        expect(getOfficeNotification("thread-a", "attention").textContent).toContain(
+          "needs your attention",
+        );
+      });
+
+      const notification = getOfficeNotification("thread-a", "attention");
+      expect(notification.textContent).toContain("waiting for your reply");
+
+      const openButton = [...notification.querySelectorAll<HTMLButtonElement>("button")].find(
+        (entry) => entry.textContent?.trim() === "Open",
+      );
+      if (!openButton) {
+        throw new Error("Missing office notification open button");
+      }
+      openButton.click();
+      await waitForOfficeLayout();
+
+      expect(getWindow("thread-a")).toBeTruthy();
+      expect(
+        document.querySelector(
+          "[data-office-notification-thread='thread-a'][data-office-notification-kind='attention']",
+        ),
+      ).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows an office notification when an agent finishes work", async () => {
+    const mounted = await mountOffice();
+    try {
+      useStore.setState((state) => ({
+        ...state,
+        threads: state.threads.map((thread) =>
+          thread.id !== ThreadId.makeUnsafe("thread-b")
+            ? thread
+            : {
+                ...thread,
+                latestTurn: {
+                  turnId: TurnId.makeUnsafe("turn-office-complete"),
+                  state: "completed",
+                  requestedAt: "2026-03-10T00:00:01.000Z",
+                  startedAt: "2026-03-10T00:00:02.000Z",
+                  completedAt: "2026-03-10T00:00:08.000Z",
+                  assistantMessageId: null,
+                },
+                session: {
+                  provider: "codex",
+                  status: "ready",
+                  createdAt: "2026-03-10T00:00:00.000Z",
+                  updatedAt: "2026-03-10T00:00:08.000Z",
+                  orchestrationStatus: "ready",
+                  activeTurnId: undefined,
+                },
+              },
+        ),
+      }));
+
+      await vi.waitFor(() => {
+        expect(getOfficeNotification("thread-b", "success").textContent).toContain(
+          "finished work",
+        );
+      });
+
+      expect(getOfficeNotification("thread-b", "success").textContent).toContain(
+        "ready for review",
+      );
     } finally {
       await mounted.cleanup();
     }

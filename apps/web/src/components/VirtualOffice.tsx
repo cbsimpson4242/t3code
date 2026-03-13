@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BotIcon,
+  CircleCheckIcon,
   CoffeeIcon,
   FolderIcon,
   MonitorIcon,
@@ -8,6 +9,8 @@ import {
   PlusIcon,
   RotateCcwIcon,
   ScanSearchIcon,
+  TriangleAlertIcon,
+  XIcon,
 } from "lucide-react";
 import type { ProjectId, ThreadId } from "@t3tools/contracts";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -42,7 +45,7 @@ import {
 import { mergeThreadsWithDrafts } from "../lib/threadDrafts";
 import { readNativeApi } from "../nativeApi";
 import { usePreviewStore } from "../previewStore";
-import { deriveWorkLogEntries } from "../session-logic";
+import { deriveWorkLogEntries, isLatestTurnSettled } from "../session-logic";
 import { useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
 import type { Thread } from "../types";
@@ -107,6 +110,7 @@ const OFFICE_VIEWPORT_POINTER_BLOCK_SELECTOR = [
   "[data-office-bot-card]",
   "[data-office-bot-thought]",
   "[data-office-thread-link]",
+  "[data-office-notification]",
 ].join(", ");
 const OFFICE_VIEWPORT_CONTEXT_MENU_BLOCK_SELECTOR = [
   "[data-office-thread-window]",
@@ -123,7 +127,10 @@ const OFFICE_VIEWPORT_CONTEXT_MENU_BLOCK_SELECTOR = [
   "[data-office-bot-card]",
   "[data-office-bot-thought]",
   "[data-office-thread-link]",
+  "[data-office-notification]",
 ].join(", ");
+const OFFICE_NOTIFICATION_LIMIT = 4;
+const OFFICE_NOTIFICATION_DURATION_MS = 6_500;
 
 const OFFICE_FURNITURE_LABELS: Record<OfficeFurnitureAddKind, string> = {
   conferenceSet: "Boardroom set",
@@ -208,6 +215,17 @@ interface OpenOfficeBrowserWindow {
   showChooser: boolean;
 }
 
+type OfficeNotificationKind = "success" | "attention";
+
+interface OfficeNotification {
+  id: string;
+  threadId: ThreadId;
+  kind: OfficeNotificationKind;
+  title: string;
+  description: string;
+  createdAt: number;
+}
+
 function closestPointOnRect(point: OfficePoint, rect: OfficeThreadWindowRect): OfficePoint {
   return {
     x: Math.min(Math.max(point.x, rect.x), rect.x + rect.width),
@@ -247,6 +265,35 @@ function summarizeOfficeThought(thread: Thread) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function getOfficeNotificationDescription(input: {
+  kind: OfficeNotificationKind;
+  hasPendingApproval: boolean;
+  hasPendingUserInput: boolean;
+}) {
+  if (input.kind === "success") {
+    return "The latest turn finished and is ready for review.";
+  }
+  if (input.hasPendingApproval) {
+    return "The agent is blocked until you approve the next step.";
+  }
+  if (input.hasPendingUserInput) {
+    return "The agent is waiting for your reply before it can continue.";
+  }
+  return "The agent is waiting for your input before it can continue.";
+}
+
+function getOfficeNotificationTonePattern(kind: OfficeNotificationKind) {
+  return kind === "attention"
+    ? [
+        { frequency: 698, durationMs: 110, gain: 0.048 },
+        { frequency: 784, durationMs: 150, gain: 0.05 },
+      ]
+    : [
+        { frequency: 523.25, durationMs: 95, gain: 0.035 },
+        { frequency: 659.25, durationMs: 130, gain: 0.04 },
+      ];
 }
 
 function rectToBounds(rect: OfficePoint & OfficeSize): OfficeSceneBounds {
@@ -621,6 +668,12 @@ export default function VirtualOffice({
   const browserWindowRectCacheRef = useRef<Record<string, OfficeThreadWindowRect>>({});
   const persistTimerRef = useRef<number | null>(null);
   const previousViewportSizeRef = useRef({ width: 0, height: 0 });
+  const officeNotificationIdRef = useRef(0);
+  const officeNotificationTimerIdsRef = useRef<Record<string, number>>({});
+  const officeNotificationAudioContextRef = useRef<AudioContext | null>(null);
+  const previousNeedsAttentionByThreadIdRef = useRef(new Map<string, boolean>());
+  const previousSettledTurnIdByThreadIdRef = useRef(new Map<string, string | null>());
+  const notificationsInitializedRef = useRef(false);
   const suppressClickUntilRef = useRef(0);
   const panStateRef = useRef<PanState | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
@@ -638,6 +691,7 @@ export default function VirtualOffice({
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [createDialogProjectId, setCreateDialogProjectId] = useState<ProjectId | null>(null);
   const [selectedFurnitureId, setSelectedFurnitureId] = useState<string | null>(null);
+  const [officeNotifications, setOfficeNotifications] = useState<OfficeNotification[]>([]);
   const shouldFitCameraRef = useRef(initialPersistedState === null);
   const camera = officeState.camera;
 
@@ -650,6 +704,111 @@ export default function VirtualOffice({
   const removeWindowToken = useCallback((token: string) => {
     setWindowStackOrder((current) => current.filter((entry) => entry !== token));
   }, []);
+
+  const dismissOfficeNotification = useCallback((notificationId: string) => {
+    const timerId = officeNotificationTimerIdsRef.current[notificationId];
+    if (typeof timerId === "number") {
+      window.clearTimeout(timerId);
+      delete officeNotificationTimerIdsRef.current[notificationId];
+    }
+    setOfficeNotifications((current) => current.filter((notification) => notification.id !== notificationId));
+  }, []);
+
+  const ensureOfficeNotificationAudioContext = useCallback(async () => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+
+    let audioContext = officeNotificationAudioContextRef.current;
+    if (!audioContext) {
+      const AudioContextConstructor =
+        window.AudioContext ??
+        (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      if (!AudioContextConstructor) {
+        return null;
+      }
+      audioContext = new AudioContextConstructor();
+      officeNotificationAudioContextRef.current = audioContext;
+    }
+
+    if (audioContext.state === "suspended") {
+      await audioContext.resume();
+    }
+
+    return audioContext;
+  }, []);
+
+  const playOfficeNotificationSound = useCallback(
+    async (kind: OfficeNotificationKind) => {
+      try {
+        const audioContext = await ensureOfficeNotificationAudioContext();
+        if (!audioContext || audioContext.state === "closed") {
+          return;
+        }
+
+        let startTime = audioContext.currentTime;
+        const waveform = kind === "attention" ? "triangle" : "sine";
+        for (const tone of getOfficeNotificationTonePattern(kind)) {
+          const oscillator = audioContext.createOscillator();
+          const gainNode = audioContext.createGain();
+
+          oscillator.type = waveform;
+          oscillator.frequency.setValueAtTime(tone.frequency, startTime);
+          gainNode.gain.setValueAtTime(0.0001, startTime);
+          gainNode.gain.exponentialRampToValueAtTime(tone.gain, startTime + 0.01);
+          gainNode.gain.exponentialRampToValueAtTime(
+            0.0001,
+            startTime + tone.durationMs / 1000,
+          );
+
+          oscillator.connect(gainNode);
+          gainNode.connect(audioContext.destination);
+          oscillator.start(startTime);
+          oscillator.stop(startTime + tone.durationMs / 1000 + 0.03);
+
+          startTime += tone.durationMs / 1000 + 0.045;
+        }
+      } catch {
+        // Ignore browser autoplay or audio-device failures and keep the visual notification.
+      }
+    },
+    [ensureOfficeNotificationAudioContext],
+  );
+
+  const pushOfficeNotification = useCallback(
+    (notification: Omit<OfficeNotification, "id" | "createdAt">) => {
+      const nextNotification: OfficeNotification = {
+        ...notification,
+        id: `office-notification-${officeNotificationIdRef.current++}`,
+        createdAt: Date.now(),
+      };
+
+      setOfficeNotifications((current) => {
+        const deduped = current.filter(
+          (entry) =>
+            !(entry.threadId === nextNotification.threadId && entry.kind === nextNotification.kind),
+        );
+        const next = [nextNotification, ...deduped];
+        const overflow = next.slice(OFFICE_NOTIFICATION_LIMIT);
+        for (const removed of overflow) {
+          const timerId = officeNotificationTimerIdsRef.current[removed.id];
+          if (typeof timerId === "number") {
+            window.clearTimeout(timerId);
+            delete officeNotificationTimerIdsRef.current[removed.id];
+          }
+        }
+        return next.slice(0, OFFICE_NOTIFICATION_LIMIT);
+      });
+
+      officeNotificationTimerIdsRef.current[nextNotification.id] = window.setTimeout(() => {
+        dismissOfficeNotification(nextNotification.id);
+      }, OFFICE_NOTIFICATION_DURATION_MS);
+
+      void playOfficeNotificationSound(notification.kind);
+    },
+    [dismissOfficeNotification, playOfficeNotificationSound],
+  );
 
   const mergedThreads = useMemo(
     () =>
@@ -921,10 +1080,32 @@ export default function VirtualOffice({
       if (currentState) {
         writeOfficePersistedState(currentState);
       }
+      for (const timerId of Object.values(officeNotificationTimerIdsRef.current)) {
+        window.clearTimeout(timerId);
+      }
+      officeNotificationTimerIdsRef.current = {};
+      const audioContext = officeNotificationAudioContextRef.current;
+      officeNotificationAudioContextRef.current = null;
+      if (audioContext && audioContext.state !== "closed") {
+        void audioContext.close().catch(() => {});
+      }
       document.body.style.removeProperty("cursor");
       document.body.style.removeProperty("user-select");
     };
   }, []);
+
+  useEffect(() => {
+    const primeAudio = () => {
+      void ensureOfficeNotificationAudioContext().catch(() => {});
+    };
+
+    window.addEventListener("pointerdown", primeAudio, { passive: true });
+    window.addEventListener("keydown", primeAudio);
+    return () => {
+      window.removeEventListener("pointerdown", primeAudio);
+      window.removeEventListener("keydown", primeAudio);
+    };
+  }, [ensureOfficeNotificationAudioContext]);
 
   const deskByThreadId = useMemo(
     () => new Map(scene.desks.map((desk) => [desk.threadId, desk] as const)),
@@ -954,6 +1135,66 @@ export default function VirtualOffice({
   );
 
   const [botStates, setBotStates] = useState<Record<string, BotState>>({});
+
+  useEffect(() => {
+    const currentNeedsAttentionByThreadId = new Map<string, boolean>();
+    const currentSettledTurnIdByThreadId = new Map<string, string | null>();
+
+    for (const thread of mergedThreads) {
+      const threadId = thread.id as string;
+      const desk = deskByThreadId.get(thread.id);
+      const needsAttention = desk?.needsAttention === true;
+      const settledTurnId =
+        isLatestTurnSettled(thread.latestTurn, thread.session) && thread.latestTurn?.turnId
+          ? (thread.latestTurn.turnId as string)
+          : null;
+
+      currentNeedsAttentionByThreadId.set(threadId, needsAttention);
+      currentSettledTurnIdByThreadId.set(threadId, settledTurnId);
+
+      const previousNeedsAttention = previousNeedsAttentionByThreadIdRef.current.get(threadId);
+      const previousSettledTurnId = previousSettledTurnIdByThreadIdRef.current.get(threadId);
+      if (
+        !notificationsInitializedRef.current ||
+        previousNeedsAttention === undefined ||
+        previousSettledTurnId === undefined
+      ) {
+        continue;
+      }
+
+      let sentAttentionNotification = false;
+      if (!previousNeedsAttention && needsAttention) {
+        pushOfficeNotification({
+          threadId: thread.id,
+          kind: "attention",
+          title: `${thread.title} needs your attention`,
+          description: getOfficeNotificationDescription({
+            kind: "attention",
+            hasPendingApproval: desk?.hasPendingApproval === true,
+            hasPendingUserInput: desk?.hasPendingUserInput === true,
+          }),
+        });
+        sentAttentionNotification = true;
+      }
+
+      if (!sentAttentionNotification && settledTurnId && previousSettledTurnId !== settledTurnId) {
+        pushOfficeNotification({
+          threadId: thread.id,
+          kind: "success",
+          title: `${thread.title} finished work`,
+          description: getOfficeNotificationDescription({
+            kind: "success",
+            hasPendingApproval: false,
+            hasPendingUserInput: false,
+          }),
+        });
+      }
+    }
+
+    previousNeedsAttentionByThreadIdRef.current = currentNeedsAttentionByThreadId;
+    previousSettledTurnIdByThreadIdRef.current = currentSettledTurnIdByThreadId;
+    notificationsInitializedRef.current = true;
+  }, [deskByThreadId, mergedThreads, pushOfficeNotification]);
 
   const openThreadWindow = useCallback(
     (threadId: ThreadId) => {
@@ -1001,6 +1242,15 @@ export default function VirtualOffice({
   const focusThreadWindow = useCallback((threadId: ThreadId) => {
     moveWindowTokenToFront(`thread:${threadId}`);
   }, [moveWindowTokenToFront]);
+
+  const handleOfficeNotificationOpen = useCallback(
+    (notification: OfficeNotification) => {
+      openThreadWindow(notification.threadId);
+      focusThreadWindow(notification.threadId);
+      dismissOfficeNotification(notification.id);
+    },
+    [dismissOfficeNotification, focusThreadWindow, openThreadWindow],
+  );
 
   useEffect(() => {
     if (!focusThreadId) {
@@ -2208,6 +2458,82 @@ export default function VirtualOffice({
           </Menu>
         </div>
       </div>
+
+      {officeNotifications.length > 0 ? (
+        <div className="pointer-events-none absolute right-4 top-20 z-[30000] flex w-[min(24rem,calc(100%-2rem))] flex-col gap-2">
+          {officeNotifications.map((notification) => {
+            const isAttention = notification.kind === "attention";
+            const accentColor = isAttention ? "#f59e0b" : "#10b981";
+            const Icon = isAttention ? TriangleAlertIcon : CircleCheckIcon;
+
+            return (
+              <div
+                key={notification.id}
+                data-office-notification={notification.id}
+                data-office-notification-thread={notification.threadId}
+                data-office-notification-kind={notification.kind}
+                className="pointer-events-auto rounded-2xl border bg-background/95 p-3 shadow-2xl backdrop-blur-sm"
+                style={{
+                  borderColor: `${accentColor}66`,
+                  boxShadow: `0 20px 50px -28px ${accentColor}88`,
+                }}
+              >
+                <div className="flex items-start gap-3">
+                  <div
+                    className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-2xl border"
+                    style={{
+                      borderColor: `${accentColor}55`,
+                      backgroundColor: `${accentColor}12`,
+                      color: accentColor,
+                    }}
+                  >
+                    <Icon className="size-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div
+                      className="text-[10px] font-semibold tracking-[0.14em] uppercase"
+                      style={{ color: accentColor }}
+                    >
+                      {isAttention ? "Needs Attention" : "Work Finished"}
+                    </div>
+                    <div className="mt-1 truncate text-sm font-semibold text-foreground">
+                      {notification.title}
+                    </div>
+                    <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      {notification.description}
+                    </div>
+                    <div className="mt-3 flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        className="h-8"
+                        onClick={() => handleOfficeNotificationOpen(notification)}
+                      >
+                        Open
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-8"
+                        onClick={() => dismissOfficeNotification(notification.id)}
+                      >
+                        Dismiss
+                      </Button>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="inline-flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    aria-label="Dismiss office notification"
+                    onClick={() => dismissOfficeNotification(notification.id)}
+                  >
+                    <XIcon className="size-4" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
 
       <div className="pointer-events-none absolute bottom-4 right-4 z-20 flex flex-col items-end gap-2">
         <div
