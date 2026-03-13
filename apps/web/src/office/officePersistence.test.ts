@@ -6,19 +6,19 @@ import { areOfficePersistedStatesEqual, parseOfficePersistedState } from "./offi
 describe("officePersistence", () => {
   it("returns null for invalid persisted payloads", () => {
     expect(parseOfficePersistedState(null)).toBeNull();
-    expect(parseOfficePersistedState({ version: 3 })).toBeNull();
+    expect(parseOfficePersistedState({ version: 4 })).toBeNull();
     expect(
       parseOfficePersistedState({
-        version: 2,
+        version: 3,
         camera: { x: 0, y: 0, zoom: 1 },
-        furniture: [{ id: "water-cooler", type: "waterCooler", x: 10, y: "bad" }],
+        furniture: [{ id: "plant-1", type: "plant", width: 56, height: 70, draggable: true }],
         projectGroupAnchors: {},
         deskOffsetsByThreadId: {},
       }),
     ).toBeNull();
     expect(
       parseOfficePersistedState({
-        version: 2,
+        version: 3,
         camera: { x: 0, y: 0, zoom: 1 },
         furniture: [],
         projectGroupAnchors: {},
@@ -28,7 +28,7 @@ describe("officePersistence", () => {
     ).toBeNull();
   });
 
-  it("accepts a valid v1 payload and compares persisted states deeply", () => {
+  it("accepts a valid v3 payload and compares persisted states deeply", () => {
     const state = createDefaultOfficePersistedState();
     const parsed = parseOfficePersistedState(state);
 
@@ -36,31 +36,64 @@ describe("officePersistence", () => {
     expect(areOfficePersistedStatesEqual(parsed!, state)).toBe(true);
   });
 
-  it("migrates legacy v1 furniture positions into v2 furniture state", () => {
-    const parsed = parseOfficePersistedState({
-      version: 1,
-      camera: { x: 10, y: 20, zoom: 1.2 },
-      elementsById: {
-        "water-cooler": { x: 220, y: 320 },
-      },
-      projectGroupAnchors: {},
-      deskOffsetsByThreadId: {},
-    });
-
-    expect(parsed?.version).toBe(2);
-    expect(parsed?.furniture.find((element) => element.id === "water-cooler")).toMatchObject({
-      x: 220,
-      y: 320,
-    });
-    expect(parsed?.groupAccentColorsByKey).toEqual({});
-  });
-
-  it("preserves group accent overrides from v2 payloads", () => {
+  it("drops shared default v2 furniture while preserving custom floating furniture", () => {
     const parsed = parseOfficePersistedState({
       version: 2,
       camera: { x: 10, y: 20, zoom: 1.2 },
-      furniture: [],
+      furniture: [
+        {
+          id: "water-cooler",
+          type: "waterCooler",
+          x: 220,
+          y: 320,
+          width: 40,
+          height: 92,
+          draggable: true,
+        },
+        {
+          id: "plant-extra",
+          type: "plant",
+          x: 1200,
+          y: 220,
+          width: 56,
+          height: 70,
+          draggable: true,
+        },
+      ],
       projectGroupAnchors: {},
+      projectGroupSizesByKey: {},
+      deskOffsetsByThreadId: {},
+      groupAccentColorsByKey: {},
+    });
+
+    expect(parsed?.version).toBe(3);
+    expect(parsed?.defaultFurnitureSeededGroupKeys).toEqual([]);
+    expect(parsed?.furniture.some((element) => element.id === "water-cooler")).toBe(false);
+    expect(parsed?.furniture.find((element) => element.id === "plant-extra")?.placement).toEqual({
+      kind: "floating",
+      position: { x: 1200, y: 220 },
+    });
+  });
+
+  it("parses v3 linked furniture correctly", () => {
+    const parsed = parseOfficePersistedState({
+      version: 3,
+      camera: { x: 10, y: 20, zoom: 1.2 },
+      furniture: [
+        {
+          id: "group:group-a:conference-table",
+          type: "conferenceTable",
+          width: 256,
+          height: 96,
+          draggable: true,
+          placement: {
+            kind: "groupLinked",
+            groupKey: "group-a",
+            offset: { x: 12, y: 34 },
+          },
+        },
+      ],
+      projectGroupAnchors: { "group-a": { x: 220, y: 88 } },
       projectGroupSizesByKey: {
         "group-a": { width: 420, height: 260 },
       },
@@ -68,13 +101,14 @@ describe("officePersistence", () => {
       groupAccentColorsByKey: {
         "group-a": "#06b6d4",
       },
+      defaultFurnitureSeededGroupKeys: ["group-a"],
     });
 
-    expect(parsed?.projectGroupSizesByKey).toEqual({
-      "group-a": { width: 420, height: 260 },
+    expect(parsed?.furniture[0]?.placement).toEqual({
+      kind: "groupLinked",
+      groupKey: "group-a",
+      offset: { x: 12, y: 34 },
     });
-    expect(parsed?.groupAccentColorsByKey).toEqual({
-      "group-a": "#06b6d4",
-    });
+    expect(parsed?.defaultFurnitureSeededGroupKeys).toEqual(["group-a"]);
   });
 });

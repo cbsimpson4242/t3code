@@ -184,38 +184,109 @@ describe("officeLayout", () => {
     expect(untouchedDesk.element).toMatchObject(beforeDeskPositions.get("thread-2")!);
   });
 
-  it("honors persisted group frame sizes", () => {
-    const projects = [makeProject("project-1", "project-a")];
+  it("seeds one default furniture kit per group and exposes congregation targets", () => {
+    const projects = [makeProject("project-1", "project-a"), makeProject("project-2", "project-b")];
     const threads = [
       makeThread({ id: "thread-1", projectId: "project-1", title: "Thread 1", worktreePath: "group-a" }),
-      makeThread({ id: "thread-2", projectId: "project-1", title: "Thread 2", worktreePath: "group-a" }),
+      makeThread({ id: "thread-2", projectId: "project-2", title: "Thread 2", worktreePath: "group-b" }),
     ];
+
+    const build = buildOfficeScene({
+      ...deriveOfficeInputs(projects, threads),
+      persistedState: createDefaultOfficePersistedState(),
+    });
+
+    expect(build.persistedState.defaultFurnitureSeededGroupKeys.toSorted()).toEqual(["group-a", "group-b"]);
+    expect(build.persistedState.furniture.filter((element) => element.placement.kind === "groupLinked")).toHaveLength(10);
+    expect(build.scene.groups.every((group) => group.congregationTargets.length > 0)).toBe(true);
+  });
+
+  it("moves linked furniture automatically when the group anchor changes", () => {
+    const projects = [makeProject("project-1", "project-a")];
+    const threads = [makeThread({ id: "thread-1", projectId: "project-1", title: "Thread 1", worktreePath: "group-a" })];
     const inputs = deriveOfficeInputs(projects, threads);
     const firstBuild = buildOfficeScene({
       ...inputs,
       persistedState: createDefaultOfficePersistedState(),
     });
+    const tableBefore = firstBuild.scene.furniture.find((element) => element.id === "group:group-a:conference-table");
+    if (!tableBefore) {
+      throw new Error("Missing linked table");
+    }
 
-    const nextBuild = buildOfficeScene({
+    const movedBuild = buildOfficeScene({
       ...inputs,
       persistedState: {
         ...firstBuild.persistedState,
-        projectGroupSizesByKey: {
-          ...firstBuild.persistedState.projectGroupSizesByKey,
+        projectGroupAnchors: {
+          ...firstBuild.persistedState.projectGroupAnchors,
           "group-a": {
-            width: firstBuild.scene.groups[0]!.element.width + 180,
-            height: firstBuild.scene.groups[0]!.element.height + 120,
+            x: firstBuild.persistedState.projectGroupAnchors["group-a"]!.x + 180,
+            y: firstBuild.persistedState.projectGroupAnchors["group-a"]!.y + 75,
           },
         },
       },
     });
+    const tableAfter = movedBuild.scene.furniture.find((element) => element.id === "group:group-a:conference-table");
 
-    expect(nextBuild.scene.groups[0]!.element.width).toBe(firstBuild.scene.groups[0]!.element.width + 180);
-    expect(nextBuild.scene.groups[0]!.element.height).toBe(firstBuild.scene.groups[0]!.element.height + 120);
-    expect(nextBuild.persistedState.projectGroupSizesByKey["group-a"]).toEqual({
-      width: firstBuild.scene.groups[0]!.element.width + 180,
-      height: firstBuild.scene.groups[0]!.element.height + 120,
+    expect(tableAfter?.x).toBe(tableBefore.x + 180);
+    expect(tableAfter?.y).toBe(tableBefore.y + 75);
+  });
+
+  it("expands group bounds to include linked furniture", () => {
+    const projects = [makeProject("project-1", "project-a")];
+    const threads = [makeThread({ id: "thread-1", projectId: "project-1", title: "Thread 1", worktreePath: "group-a" })];
+
+    const build = buildOfficeScene({
+      ...deriveOfficeInputs(projects, threads),
+      persistedState: createDefaultOfficePersistedState(),
     });
+    const group = build.scene.groups[0]!;
+    const groupFurniture = build.scene.furniture.filter((element) => element.id.startsWith("group:group-a:"));
+
+    for (const furniture of groupFurniture) {
+      expect(furniture.x).toBeGreaterThanOrEqual(group.element.x);
+      expect(furniture.y).toBeGreaterThanOrEqual(group.element.y);
+      expect(furniture.x + furniture.width).toBeLessThanOrEqual(group.element.x + group.element.width);
+      expect(furniture.y + furniture.height).toBeLessThanOrEqual(group.element.y + group.element.height);
+    }
+  });
+
+  it("does not let one group's furniture or congregation targets appear in another office", () => {
+    const projects = [makeProject("project-1", "project-a"), makeProject("project-2", "project-b")];
+    const threads = [
+      makeThread({ id: "thread-1", projectId: "project-1", title: "Thread 1", worktreePath: "group-a" }),
+      makeThread({ id: "thread-2", projectId: "project-2", title: "Thread 2", worktreePath: "group-b" }),
+    ];
+
+    const build = buildOfficeScene({
+      ...deriveOfficeInputs(projects, threads),
+      persistedState: createDefaultOfficePersistedState(),
+    });
+    const groupA = build.scene.groups.find((group) => group.key === "group-a")!;
+    const groupB = build.scene.groups.find((group) => group.key === "group-b")!;
+
+    expect(groupA.congregationTargets.every((target) => target.furnitureId.startsWith("group:group-a:"))).toBe(true);
+    expect(groupB.congregationTargets.every((target) => target.furnitureId.startsWith("group:group-b:"))).toBe(true);
+  });
+
+  it("does not restore removed default office furniture after seeding", () => {
+    const projects = [makeProject("project-1", "project-a")];
+    const threads = [makeThread({ id: "thread-1", projectId: "project-1", title: "Thread 1", worktreePath: "group-a" })];
+    const firstBuild = buildOfficeScene({
+      ...deriveOfficeInputs(projects, threads),
+      persistedState: createDefaultOfficePersistedState(),
+    });
+
+    const nextBuild = buildOfficeScene({
+      ...deriveOfficeInputs(projects, threads),
+      persistedState: {
+        ...firstBuild.persistedState,
+        furniture: firstBuild.persistedState.furniture.filter((element) => element.id !== "group:group-a:water-cooler"),
+      },
+    });
+
+    expect(nextBuild.scene.furniture.some((element) => element.id === "group:group-a:water-cooler")).toBe(false);
   });
 
   it("marks desks that have pending user attention", () => {
@@ -376,32 +447,5 @@ describe("officeLayout", () => {
     expect(firstGroupA?.accentColor).not.toBe(firstGroupB?.accentColor);
     expect(overriddenGroupA?.accentColor).toBe("#06b6d4");
     expect(overriddenBuild.scene.groups.find((group) => group.key === "group-a")?.accentColor).toBe("#06b6d4");
-  });
-
-  it("preserves customized furniture sets without restoring removed defaults", () => {
-    const projects = [makeProject("project-1", "project-a")];
-    const threads = [makeThread({ id: "thread-1", projectId: "project-1", title: "Thread 1", worktreePath: "group-a" })];
-    const persistedState = createDefaultOfficePersistedState();
-    persistedState.furniture = persistedState.furniture.filter(
-      (element) => element.id !== "water-cooler" && element.parentId !== "conference-table",
-    );
-    persistedState.furniture.push({
-      id: "plant-extra",
-      type: "plant",
-      x: 1200,
-      y: 220,
-      width: 56,
-      height: 70,
-      draggable: true,
-    });
-
-    const inputs = deriveOfficeInputs(projects, threads);
-    const build = buildOfficeScene({
-      ...inputs,
-      persistedState,
-    });
-
-    expect(build.scene.furniture.some((element) => element.id === "water-cooler")).toBe(false);
-    expect(build.scene.furniture.some((element) => element.id === "plant-extra")).toBe(true);
   });
 });

@@ -1,5 +1,4 @@
 import type { OfficePersistedState } from "./officeTypes";
-import { createDefaultOfficeFurniture } from "./officeFurniture";
 
 export const OFFICE_LAYOUT_STORAGE_KEY = "t3code:office-layout:v1";
 export const OFFICE_MIN_ZOOM = 0.25;
@@ -34,17 +33,18 @@ export const COFFEE_BAR_SNACK_IDS = [
 
 export function createDefaultOfficePersistedState(): OfficePersistedState {
   return {
-    version: 2,
+    version: 3,
     camera: {
       x: 0,
       y: 0,
       zoom: 1,
     },
-    furniture: createDefaultOfficeFurniture(),
+    furniture: [],
     projectGroupAnchors: {},
     projectGroupSizesByKey: {},
     deskOffsetsByThreadId: {},
     groupAccentColorsByKey: {},
     adminDeskPosition: { ...DEFAULT_ADMIN_DESK_POSITION },
+    defaultFurnitureSeededGroupKeys: [],
   };
 }

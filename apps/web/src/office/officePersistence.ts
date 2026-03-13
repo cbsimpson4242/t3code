@@ -1,9 +1,13 @@
+import { OFFICE_LAYOUT_STORAGE_KEY, createDefaultOfficePersistedState } from "./officeDefaults";
 import {
-  OFFICE_LAYOUT_STORAGE_KEY,
-  createDefaultOfficePersistedState,
-} from "./officeDefaults";
-import { createDefaultOfficeFurniture } from "./officeFurniture";
-import type { OfficeElement, OfficePersistedState } from "./officeTypes";
+  createLegacyDefaultOfficeFurnitureAsFloating,
+  isLegacyDefaultOfficeFurnitureId,
+} from "./officeFurniture";
+import type {
+  OfficeFurniturePlacement,
+  OfficePersistedFurniture,
+  OfficePersistedState,
+} from "./officeTypes";
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -58,6 +62,16 @@ function readStringMap(value: unknown): Record<string, string> | null {
   return next;
 }
 
+function readStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  if (!value.every((entry) => typeof entry === "string")) {
+    return null;
+  }
+  return [...value];
+}
+
 function readSizeMap(value: unknown): Record<string, { width: number; height: number }> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return null;
@@ -81,12 +95,8 @@ function readSizeMap(value: unknown): Record<string, { width: number; height: nu
   return next;
 }
 
-function isOfficeElementType(
-  value: unknown,
-): value is OfficeElement["type"] {
+function isOfficeFurnitureType(value: unknown): value is OfficePersistedFurniture["type"] {
   return (
-    value === "projectGroup" ||
-    value === "desk" ||
     value === "waterCooler" ||
     value === "conferenceTable" ||
     value === "chair" ||
@@ -95,14 +105,110 @@ function isOfficeElementType(
   );
 }
 
-function isOfficeElementRecord(value: unknown): value is OfficeElement {
+function readPlacement(value: unknown): OfficeFurniturePlacement | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const placement = value as {
+    kind?: unknown;
+    position?: unknown;
+    groupKey?: unknown;
+    offset?: unknown;
+  };
+  if (placement.kind === "floating" && isPointRecord(placement.position)) {
+    return {
+      kind: "floating",
+      position: { x: placement.position.x, y: placement.position.y },
+    };
+  }
+  if (
+    placement.kind === "groupLinked" &&
+    typeof placement.groupKey === "string" &&
+    isPointRecord(placement.offset)
+  ) {
+    return {
+      kind: "groupLinked",
+      groupKey: placement.groupKey,
+      offset: { x: placement.offset.x, y: placement.offset.y },
+    };
+  }
+  return null;
+}
+
+function isOfficePersistedFurnitureRecord(value: unknown): value is OfficePersistedFurniture {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
   }
-  const element = value as Partial<OfficeElement>;
+  const furniture = value as Partial<OfficePersistedFurniture>;
+  if (
+    typeof furniture.id !== "string" ||
+    !isOfficeFurnitureType(furniture.type) ||
+    !isFiniteNumber(furniture.width) ||
+    !isFiniteNumber(furniture.height) ||
+    typeof furniture.draggable !== "boolean" ||
+    !readPlacement(furniture.placement)
+  ) {
+    return false;
+  }
+  if (furniture.parentId !== undefined && typeof furniture.parentId !== "string") {
+    return false;
+  }
+  if (
+    furniture.metadata !== undefined &&
+    (typeof furniture.metadata !== "object" || furniture.metadata === null || Array.isArray(furniture.metadata))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function readPersistedFurniture(value: unknown): OfficePersistedFurniture[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const furniture: OfficePersistedFurniture[] = [];
+  for (const entry of value) {
+    if (!isOfficePersistedFurnitureRecord(entry)) {
+      return null;
+    }
+    furniture.push({
+      id: entry.id,
+      type: entry.type,
+      width: entry.width,
+      height: entry.height,
+      draggable: entry.draggable,
+      placement: readPlacement(entry.placement)!,
+      ...(entry.parentId ? { parentId: entry.parentId } : {}),
+      ...(entry.metadata ? { metadata: { ...entry.metadata } } : {}),
+    });
+  }
+  return furniture;
+}
+
+interface LegacyOfficeElement {
+  id: string;
+  type: OfficePersistedFurniture["type"];
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  draggable: boolean;
+  parentId?: string;
+  metadata?: Record<string, string | number | boolean | null | undefined>;
+}
+
+function isLegacyOfficeElementType(value: unknown): value is LegacyOfficeElement["type"] {
+  return isOfficeFurnitureType(value);
+}
+
+function isLegacyOfficeElementRecord(value: unknown): value is LegacyOfficeElement {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const element = value as Partial<LegacyOfficeElement>;
   if (
     typeof element.id !== "string" ||
-    !isOfficeElementType(element.type) ||
+    !isLegacyOfficeElementType(element.type) ||
     !isFiniteNumber(element.x) ||
     !isFiniteNumber(element.y) ||
     !isFiniteNumber(element.width) ||
@@ -123,13 +229,13 @@ function isOfficeElementRecord(value: unknown): value is OfficeElement {
   return true;
 }
 
-function readFurniture(value: unknown): OfficeElement[] | null {
+function readLegacyFurniture(value: unknown): LegacyOfficeElement[] | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const furniture: OfficeElement[] = [];
+  const furniture: LegacyOfficeElement[] = [];
   for (const element of value) {
-    if (!isOfficeElementRecord(element)) {
+    if (!isLegacyOfficeElementRecord(element)) {
       return null;
     }
     furniture.push({
@@ -191,6 +297,46 @@ function parseLegacyOfficePersistedState(raw: unknown): LegacyOfficePersistedSta
   };
 }
 
+function migrateLegacyElementsToPersistedFurniture(
+  furniture: LegacyOfficeElement[],
+): OfficePersistedFurniture[] {
+  const droppedLegacyIds = new Set(
+    furniture
+      .filter(
+        (element) =>
+          isLegacyDefaultOfficeFurnitureId(element.id) ||
+          (element.parentId ? isLegacyDefaultOfficeFurnitureId(element.parentId) : false),
+      )
+      .map((element) => element.id),
+  );
+
+  const migrated: OfficePersistedFurniture[] = [];
+  for (const element of furniture) {
+    if (droppedLegacyIds.has(element.id)) {
+      continue;
+    }
+    const next: OfficePersistedFurniture = {
+      id: element.id,
+      type: element.type,
+      width: element.width,
+      height: element.height,
+      draggable: element.draggable,
+      placement: {
+        kind: "floating",
+        position: { x: element.x, y: element.y },
+      },
+    };
+    if (element.parentId) {
+      next.parentId = element.parentId;
+    }
+    if (element.metadata) {
+      next.metadata = { ...element.metadata };
+    }
+    migrated.push(next);
+  }
+  return migrated;
+}
+
 export function parseOfficePersistedState(raw: unknown): OfficePersistedState | null {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return null;
@@ -205,19 +351,67 @@ export function parseOfficePersistedState(raw: unknown): OfficePersistedState | 
     deskOffsetsByThreadId?: unknown;
     groupAccentColorsByKey?: unknown;
     adminDeskPosition?: unknown;
+    defaultFurnitureSeededGroupKeys?: unknown;
   };
-  if (value.version === 2 && isCameraRecord(value.camera)) {
-    const furniture = readFurniture(value.furniture);
+
+  if (value.version === 3 && isCameraRecord(value.camera)) {
+    const furniture = readPersistedFurniture(value.furniture);
     const projectGroupAnchors = readPointMap(value.projectGroupAnchors);
     const projectGroupSizesByKey =
       value.projectGroupSizesByKey === undefined ? {} : readSizeMap(value.projectGroupSizesByKey);
     const deskOffsetsByThreadId = readPointMap(value.deskOffsetsByThreadId);
     const groupAccentColorsByKey =
-      value.groupAccentColorsByKey === undefined
-        ? {}
-        : readStringMap(value.groupAccentColorsByKey);
+      value.groupAccentColorsByKey === undefined ? {} : readStringMap(value.groupAccentColorsByKey);
     const adminDeskPosition =
-      value.adminDeskPosition === undefined ? createDefaultOfficePersistedState().adminDeskPosition : value.adminDeskPosition;
+      value.adminDeskPosition === undefined
+        ? createDefaultOfficePersistedState().adminDeskPosition
+        : value.adminDeskPosition;
+    const defaultFurnitureSeededGroupKeys =
+      value.defaultFurnitureSeededGroupKeys === undefined
+        ? []
+        : readStringArray(value.defaultFurnitureSeededGroupKeys);
+
+    if (
+      !furniture ||
+      !projectGroupAnchors ||
+      !projectGroupSizesByKey ||
+      !deskOffsetsByThreadId ||
+      !groupAccentColorsByKey ||
+      !isPointRecord(adminDeskPosition) ||
+      !defaultFurnitureSeededGroupKeys
+    ) {
+      return null;
+    }
+
+    return {
+      version: 3,
+      camera: {
+        x: value.camera.x,
+        y: value.camera.y,
+        zoom: value.camera.zoom,
+      },
+      furniture,
+      projectGroupAnchors,
+      projectGroupSizesByKey,
+      deskOffsetsByThreadId,
+      groupAccentColorsByKey,
+      adminDeskPosition: { x: adminDeskPosition.x, y: adminDeskPosition.y },
+      defaultFurnitureSeededGroupKeys,
+    };
+  }
+
+  if (value.version === 2 && isCameraRecord(value.camera)) {
+    const furniture = readLegacyFurniture(value.furniture);
+    const projectGroupAnchors = readPointMap(value.projectGroupAnchors);
+    const projectGroupSizesByKey =
+      value.projectGroupSizesByKey === undefined ? {} : readSizeMap(value.projectGroupSizesByKey);
+    const deskOffsetsByThreadId = readPointMap(value.deskOffsetsByThreadId);
+    const groupAccentColorsByKey =
+      value.groupAccentColorsByKey === undefined ? {} : readStringMap(value.groupAccentColorsByKey);
+    const adminDeskPosition =
+      value.adminDeskPosition === undefined
+        ? createDefaultOfficePersistedState().adminDeskPosition
+        : value.adminDeskPosition;
     if (
       !furniture ||
       !projectGroupAnchors ||
@@ -230,18 +424,19 @@ export function parseOfficePersistedState(raw: unknown): OfficePersistedState | 
     }
 
     return {
-      version: 2,
+      version: 3,
       camera: {
         x: value.camera.x,
         y: value.camera.y,
         zoom: value.camera.zoom,
       },
-      furniture,
+      furniture: migrateLegacyElementsToPersistedFurniture(furniture),
       projectGroupAnchors,
       projectGroupSizesByKey,
       deskOffsetsByThreadId,
       groupAccentColorsByKey,
       adminDeskPosition: { x: adminDeskPosition.x, y: adminDeskPosition.y },
+      defaultFurnitureSeededGroupKeys: [],
     };
   }
 
@@ -250,26 +445,49 @@ export function parseOfficePersistedState(raw: unknown): OfficePersistedState | 
     return null;
   }
 
+  const legacyFurniture = createLegacyDefaultOfficeFurnitureAsFloating().map((element) => {
+    const position =
+      element.placement.kind === "floating" ? legacyState.elementsById[element.id] : undefined;
+    if (!position || element.placement.kind !== "floating") {
+      return element;
+    }
+    return Object.assign({}, element, {
+      placement: {
+        kind: "floating" as const,
+        position: { x: position.x, y: position.y },
+      },
+    });
+  });
+
+  const migratedLegacyFurniture: LegacyOfficeElement[] = legacyFurniture.map((element) => {
+    const next: LegacyOfficeElement = {
+      id: element.id,
+      type: element.type,
+      x: element.placement.kind === "floating" ? element.placement.position.x : 0,
+      y: element.placement.kind === "floating" ? element.placement.position.y : 0,
+      width: element.width,
+      height: element.height,
+      draggable: element.draggable,
+    };
+    if (element.parentId) {
+      next.parentId = element.parentId;
+    }
+    if (element.metadata) {
+      next.metadata = { ...element.metadata };
+    }
+    return next;
+  });
+
   return {
-    version: 2,
+    version: 3,
     camera: legacyState.camera,
-    furniture: (() => {
-      const furniture = createDefaultOfficeFurniture();
-      for (const element of furniture) {
-        const position = legacyState.elementsById[element.id];
-        if (!position) {
-          continue;
-        }
-        element.x = position.x;
-        element.y = position.y;
-      }
-      return furniture;
-    })(),
+    furniture: migrateLegacyElementsToPersistedFurniture(migratedLegacyFurniture),
     projectGroupAnchors: legacyState.projectGroupAnchors,
     projectGroupSizesByKey: {},
     deskOffsetsByThreadId: legacyState.deskOffsetsByThreadId,
     groupAccentColorsByKey: {},
     adminDeskPosition: createDefaultOfficePersistedState().adminDeskPosition,
+    defaultFurnitureSeededGroupKeys: [],
   };
 }
 
@@ -375,15 +593,38 @@ function compareSizeMaps(
   return true;
 }
 
-function areOfficeElementsEqual(left: OfficeElement, right: OfficeElement): boolean {
+function compareStringArrays(left: string[] | undefined, right: string[] | undefined): boolean {
+  if (!left || !right || left.length !== right.length) {
+    return false;
+  }
+  return left.every((entry, index) => entry === right[index]);
+}
+
+function arePlacementsEqual(left: OfficeFurniturePlacement, right: OfficeFurniturePlacement): boolean {
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  if (left.kind === "floating" && right.kind === "floating") {
+    return left.position.x === right.position.x && left.position.y === right.position.y;
+  }
+  if (left.kind === "groupLinked" && right.kind === "groupLinked") {
+    return (
+      left.groupKey === right.groupKey &&
+      left.offset.x === right.offset.x &&
+      left.offset.y === right.offset.y
+    );
+  }
+  return false;
+}
+
+function areOfficeFurnitureEqual(left: OfficePersistedFurniture, right: OfficePersistedFurniture): boolean {
   return (
     left.id === right.id &&
     left.type === right.type &&
-    left.x === right.x &&
-    left.y === right.y &&
     left.width === right.width &&
     left.height === right.height &&
     left.draggable === right.draggable &&
+    arePlacementsEqual(left.placement, right.placement) &&
     left.parentId === right.parentId &&
     JSON.stringify(left.metadata ?? null) === JSON.stringify(right.metadata ?? null)
   );
@@ -399,12 +640,13 @@ export function areOfficePersistedStatesEqual(
     left.camera.y === right.camera.y &&
     left.camera.zoom === right.camera.zoom &&
     left.furniture.length === right.furniture.length &&
-    left.furniture.every((element, index) => areOfficeElementsEqual(element, right.furniture[index]!)) &&
+    left.furniture.every((element, index) => areOfficeFurnitureEqual(element, right.furniture[index]!)) &&
     comparePointMaps(left.projectGroupAnchors, right.projectGroupAnchors) &&
     compareSizeMaps(left.projectGroupSizesByKey, right.projectGroupSizesByKey) &&
     comparePointMaps(left.deskOffsetsByThreadId, right.deskOffsetsByThreadId) &&
     compareStringMaps(left.groupAccentColorsByKey, right.groupAccentColorsByKey) &&
     left.adminDeskPosition.x === right.adminDeskPosition.x &&
-    left.adminDeskPosition.y === right.adminDeskPosition.y
+    left.adminDeskPosition.y === right.adminDeskPosition.y &&
+    compareStringArrays(left.defaultFurnitureSeededGroupKeys, right.defaultFurnitureSeededGroupKeys)
   );
 }

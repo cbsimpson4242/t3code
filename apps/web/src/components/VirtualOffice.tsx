@@ -64,6 +64,7 @@ import {
   removeOfficeFurniture,
   type OfficeFurnitureAddKind,
 } from "../office/officeFurniture";
+import { getIdleOfficeDestination } from "../office/officeBotRouting";
 import { buildOfficeScene, deriveOfficeInputs } from "../office/officeLayout";
 import {
   areOfficePersistedStatesEqual,
@@ -81,17 +82,6 @@ import type {
 } from "../office/officeTypes";
 
 const THOUGHT_EMOJIS = ["\u2615", "\ud83d\udca4", "\ud83d\udca1", "\ud83c\udf3f", "\ud83c\udfb5", "\ud83d\ude80", "\ud83d\udcda", "\u2728"];
-const IDLE_POIS = [
-  { x: 180, y: 310 },
-  { x: 120, y: 500 },
-  { x: 1480, y: 500 },
-  { x: 800, y: 450 },
-  { x: 900, y: 395 },
-  { x: 700, y: 395 },
-  { x: 1360, y: 110 },
-  { x: 800, y: 290 },
-  { x: 340, y: 450 },
-];
 const ADMIN_DESK_WIDTH = 156;
 const ADMIN_DESK_HEIGHT = 120;
 const ADMIN_WINDOW_ACCENT = "#f59e0b";
@@ -105,7 +95,7 @@ const OFFICE_FURNITURE_LABELS: Record<OfficeFurnitureAddKind, string> = {
   conferenceTable: "Table",
   chair: "Chair",
   plant: "Plant",
-  coffeeBar: "Coffee bar",
+  coffeeBar: "Coffee machine",
 };
 
 interface BotState {
@@ -115,6 +105,7 @@ interface BotState {
   transitionMs: number;
   facingLeft: boolean;
   thoughtEmoji: string | null;
+  idleStep: number;
 }
 
 interface VirtualOfficeProps {
@@ -334,14 +325,6 @@ function getServerHttpOrigin() {
 }
 
 const serverHttpOrigin = getServerHttpOrigin();
-
-function getRandomPOI() {
-  return IDLE_POIS[Math.floor(Math.random() * IDLE_POIS.length)]!;
-}
-
-function jitter(num: number, amount = 15) {
-  return num + (Math.random() * amount * 2 - amount);
-}
 
 function distance(a: { x: number; y: number }, b: { x: number; y: number }) {
   return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
@@ -745,21 +728,27 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
     () => new Map(scene.desks.map((desk) => [desk.threadId, desk] as const)),
     [scene.desks],
   );
+  const groupByKey = useMemo(
+    () => new Map(scene.groups.map((group) => [group.key, group] as const)),
+    [scene.groups],
+  );
   const bots = useMemo(
     () =>
       officeInputs.desks
         .map((desk) => {
           const deskScene = deskByThreadId.get(desk.threadId);
+          const groupScene = groupByKey.get(desk.groupKey);
           if (!deskScene) {
             return null;
           }
           return {
             ...desk,
             deskLocation: deskScene.botTarget,
+            officeTargets: groupScene?.congregationTargets ?? [],
           };
         })
         .filter((desk): desk is NonNullable<typeof desk> => desk !== null),
-    [deskByThreadId, officeInputs.desks],
+    [deskByThreadId, groupByKey, officeInputs.desks],
   );
 
   const [botStates, setBotStates] = useState<Record<string, BotState>>({});
@@ -1067,6 +1056,7 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
           transitionMs: 2000,
           facingLeft: false,
           thoughtEmoji: null,
+          idleStep: 0,
         };
         changed = true;
       }
@@ -1103,6 +1093,7 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
           nextMoveTime: Date.now() + 500,
           facingLeft: bot.deskLocation.x < state.x,
           thoughtEmoji: null,
+          idleStep: state.idleStep,
         };
         changed = true;
       }
@@ -1138,6 +1129,7 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
                 nextMoveTime: now + Math.max(1000, dist * 4) + 500,
                 facingLeft: bot.deskLocation.x < state.x,
                 thoughtEmoji: null,
+                idleStep: state.idleStep,
               };
             } else {
               next[bot.threadId] = {
@@ -1147,6 +1139,7 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
                 transitionMs: 400,
                 nextMoveTime: now + 1500 + Math.random() * 1000,
                 thoughtEmoji: null,
+                idleStep: state.idleStep,
               };
             }
             changed = true;
@@ -1161,13 +1154,19 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
                 Math.random() < 0.25
                   ? THOUGHT_EMOJIS[Math.floor(Math.random() * THOUGHT_EMOJIS.length)]!
                   : null,
+              idleStep: state.idleStep,
             };
             changed = true;
             continue;
           }
 
-          const target = getRandomPOI();
-          const destination = { x: jitter(target.x, 25), y: jitter(target.y, 25) };
+          const nextIdleStep = state.idleStep + 1;
+          const destination = getIdleOfficeDestination({
+            threadId: bot.threadId,
+            officeTargets: bot.officeTargets,
+            deskLocation: bot.deskLocation,
+            idleStep: nextIdleStep,
+          });
           const dist = distance(state, destination);
           const transitionMs = Math.max(1500, dist * 5);
           next[bot.threadId] = {
@@ -1181,6 +1180,7 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
               Math.random() < 0.15
                 ? THOUGHT_EMOJIS[Math.floor(Math.random() * THOUGHT_EMOJIS.length)]!
                 : null,
+            idleStep: nextIdleStep,
           };
           changed = true;
         }
@@ -1626,14 +1626,18 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
           };
         }
 
-        const movedFurniture = moveOfficeFurnitureWithChildren(current.furniture, dragState.key, nextPoint);
+        const movedFurniture = moveOfficeFurnitureWithChildren({
+          furniture: current.furniture,
+          movedId: dragState.key,
+          nextPoint,
+          groupAnchors: current.projectGroupAnchors,
+        });
         const didChange = movedFurniture.some((element, index) => {
           const previous = current.furniture[index];
           return (
             previous?.id !== element.id ||
-            previous.x !== element.x ||
-            previous.y !== element.y ||
-            previous.parentId !== element.parentId
+            previous?.parentId !== element.parentId ||
+            JSON.stringify(previous?.placement ?? null) !== JSON.stringify(element.placement)
           );
         });
         if (!didChange) {

@@ -7,7 +7,11 @@ export type OfficeElementType =
   | "plant"
   | "coffeeBar";
 
+export type OfficeFurnitureType = Exclude<OfficeElementType, "projectGroup" | "desk">;
+
 export type OfficeElementId = string;
+
+export type OfficeElementMetadata = Record<string, string | number | boolean | null | undefined>;
 
 export interface OfficePoint {
   x: number;
@@ -41,7 +45,7 @@ export interface OfficeElement {
   height: number;
   draggable: boolean;
   parentId?: string;
-  metadata?: Record<string, string | number | boolean | null | undefined>;
+  metadata?: OfficeElementMetadata;
 }
 
 export interface OfficeProjectGroupAnchor extends OfficePoint {
@@ -52,15 +56,38 @@ export interface OfficeDeskOffset extends OfficePoint {
   threadId: string;
 }
 
+export type OfficeFurniturePlacement =
+  | {
+      kind: "floating";
+      position: OfficePoint;
+    }
+  | {
+      kind: "groupLinked";
+      groupKey: string;
+      offset: OfficePoint;
+    };
+
+export interface OfficePersistedFurniture {
+  id: OfficeElementId;
+  type: OfficeFurnitureType;
+  width: number;
+  height: number;
+  draggable: boolean;
+  placement: OfficeFurniturePlacement;
+  parentId?: string;
+  metadata?: OfficeElementMetadata;
+}
+
 export interface OfficePersistedState {
-  version: 2;
+  version: 3;
   camera: OfficeCameraState;
-  furniture: OfficeElement[];
+  furniture: OfficePersistedFurniture[];
   projectGroupAnchors: Record<string, OfficePoint>;
   projectGroupSizesByKey: Record<string, OfficeSize>;
   deskOffsetsByThreadId: Record<string, OfficePoint>;
   groupAccentColorsByKey: Record<string, string>;
   adminDeskPosition: OfficePoint;
+  defaultFurnitureSeededGroupKeys: string[];
 }
 
 export interface OfficeProjectGroupInput {
@@ -84,6 +111,12 @@ export interface OfficeDeskInput {
   colorIndex: number;
 }
 
+export interface OfficeCongregationTarget extends OfficePoint {
+  id: string;
+  furnitureId: string;
+  furnitureType: OfficeFurnitureType;
+}
+
 export interface OfficeProjectGroupScene {
   key: string;
   label: string;
@@ -92,6 +125,7 @@ export interface OfficeProjectGroupScene {
   anchor: OfficeProjectGroupAnchor;
   element: OfficeElement;
   deskThreadIds: string[];
+  congregationTargets: OfficeCongregationTarget[];
 }
 
 export interface OfficeDeskScene {

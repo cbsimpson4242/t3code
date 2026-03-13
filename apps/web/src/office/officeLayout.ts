@@ -13,10 +13,15 @@ import {
   GROUP_MIN_WIDTH,
 } from "./officeDefaults";
 import { resolveOfficeGroupAccent } from "./officeColors";
+import {
+  createDefaultOfficeFurnitureForGroup,
+  resolveOfficeFurniture,
+} from "./officeFurniture";
 import type {
   OfficeDeskInput,
   OfficeDeskScene,
   OfficeElement,
+  OfficePersistedFurniture,
   OfficePersistedState,
   OfficePoint,
   OfficeProjectGroupInput,
@@ -117,13 +122,34 @@ function nextDeskOffset(existingOffsets: OfficePoint[]): OfficePoint {
   };
 }
 
+function clonePersistedFurniture(furniture: OfficePersistedFurniture): OfficePersistedFurniture {
+  return {
+    id: furniture.id,
+    type: furniture.type,
+    width: furniture.width,
+    height: furniture.height,
+    draggable: furniture.draggable,
+    placement:
+      furniture.placement.kind === "floating"
+        ? {
+            kind: "floating",
+            position: { ...furniture.placement.position },
+          }
+        : {
+            kind: "groupLinked",
+            groupKey: furniture.placement.groupKey,
+            offset: { ...furniture.placement.offset },
+          },
+    ...(furniture.parentId ? { parentId: furniture.parentId } : {}),
+    ...(furniture.metadata ? { metadata: { ...furniture.metadata } } : {}),
+  };
+}
+
 function threadHasVisibleOfficeActivity(thread: Thread): boolean {
   const sessionPhase = derivePhase(thread.session);
   if (sessionPhase === "running" || sessionPhase === "connecting") {
     return true;
   }
-  // The office should only animate for work that is still visibly in flight.
-  // Stale activeTurn/latestTurn markers can survive stop/reconnect edges.
   return thread.messages.some((message) => message.role === "assistant" && message.streaming);
 }
 
@@ -221,6 +247,21 @@ export function buildOfficeScene(input: {
     nextProjectGroupAnchors[group.key] = nextGroupAnchor(Object.values(nextProjectGroupAnchors));
   }
 
+  const seededGroupKeys = new Set(input.persistedState.defaultFurnitureSeededGroupKeys);
+  const nextPersistedFurniture = input.persistedState.furniture.map(clonePersistedFurniture);
+  for (const group of input.groups) {
+    if (seededGroupKeys.has(group.key)) {
+      continue;
+    }
+    nextPersistedFurniture.push(...createDefaultOfficeFurnitureForGroup(group.key, nextPersistedFurniture));
+    seededGroupKeys.add(group.key);
+  }
+
+  const resolvedFurniture = resolveOfficeFurniture({
+    furniture: nextPersistedFurniture,
+    groupAnchors: nextProjectGroupAnchors,
+  });
+
   const nextDeskOffsetsByThreadId: Record<string, OfficePoint> = {};
   const deskScenes: OfficeDeskScene[] = [];
   const groupScenes: OfficeProjectGroupScene[] = [];
@@ -263,18 +304,22 @@ export function buildOfficeScene(input: {
     }
 
     const groupDeskScenes = deskScenes.filter((desk) => desk.groupKey === group.key);
-    const minLocalX = groupDeskScenes.length
-      ? Math.min(...groupDeskScenes.map((desk) => desk.element.x - anchor.x))
+    const linkedFurniture = resolvedFurniture.linkedFurnitureByGroupKey[group.key] ?? [];
+    const groupLocalElements = [...groupDeskScenes.map((desk) => desk.element), ...linkedFurniture];
+
+    const minLocalX = groupLocalElements.length
+      ? Math.min(...groupLocalElements.map((element) => element.x - anchor.x))
       : 0;
-    const minLocalY = groupDeskScenes.length
-      ? Math.min(...groupDeskScenes.map((desk) => desk.element.y - anchor.y))
+    const minLocalY = groupLocalElements.length
+      ? Math.min(...groupLocalElements.map((element) => element.y - anchor.y))
       : 0;
-    const maxLocalRight = groupDeskScenes.length
-      ? Math.max(...groupDeskScenes.map((desk) => desk.element.x - anchor.x + desk.element.width))
+    const maxLocalRight = groupLocalElements.length
+      ? Math.max(...groupLocalElements.map((element) => element.x - anchor.x + element.width))
       : GROUP_MIN_WIDTH - GROUP_FRAME_SIDE_PADDING * 2;
-    const maxLocalBottom = groupDeskScenes.length
-      ? Math.max(...groupDeskScenes.map((desk) => desk.element.y - anchor.y + desk.element.height))
+    const maxLocalBottom = groupLocalElements.length
+      ? Math.max(...groupLocalElements.map((element) => element.y - anchor.y + element.height))
       : GROUP_MIN_HEIGHT - GROUP_FRAME_TOP_PADDING - GROUP_FRAME_BOTTOM_PADDING;
+
     const frameLeft = anchor.x + Math.min(0, minLocalX - GROUP_FRAME_SIDE_PADDING);
     const frameTop =
       anchor.y + Math.min(-GROUP_FRAME_TOP_PADDING, minLocalY - GROUP_FRAME_TOP_PADDING);
@@ -320,49 +365,40 @@ export function buildOfficeScene(input: {
         },
       },
       deskThreadIds: group.threadIds,
+      congregationTargets: (resolvedFurniture.congregationTargetsByGroupKey[group.key] ?? []).map(
+        (target) => ({
+          id: target.id,
+          furnitureId: target.furnitureId,
+          furnitureType: target.furnitureType,
+          x: target.x,
+          y: target.y,
+        }),
+      ),
     });
   }
-
-  const furniture = input.persistedState.furniture.map((element) => {
-    const nextElement: OfficeElement = {
-      id: element.id,
-      type: element.type,
-      x: element.x,
-      y: element.y,
-      width: element.width,
-      height: element.height,
-      draggable: element.draggable,
-    };
-    if (element.parentId) {
-      nextElement.parentId = element.parentId;
-    }
-    if (element.metadata) {
-      nextElement.metadata = { ...element.metadata };
-    }
-    return nextElement;
-  });
 
   const bounds = unionBounds([
     ...groupScenes.map((group) => elementBounds(group.element)),
     ...deskScenes.map((desk) => elementBounds(desk.element)),
-    ...furniture.map((element) => elementBounds(element)),
+    ...resolvedFurniture.allFurniture.map((element) => elementBounds(element)),
   ]);
 
   return {
     persistedState: {
-      version: 2,
-      camera: input.persistedState.camera,
-      furniture,
+      version: 3,
+      camera: { ...input.persistedState.camera },
+      furniture: nextPersistedFurniture.map(clonePersistedFurniture),
       projectGroupAnchors: nextProjectGroupAnchors,
       projectGroupSizesByKey: nextProjectGroupSizesByKey,
       deskOffsetsByThreadId: nextDeskOffsetsByThreadId,
       groupAccentColorsByKey: { ...input.persistedState.groupAccentColorsByKey },
       adminDeskPosition: { ...input.persistedState.adminDeskPosition },
+      defaultFurnitureSeededGroupKeys: [...seededGroupKeys],
     },
     scene: {
       groups: groupScenes,
       desks: deskScenes,
-      furniture,
+      furniture: resolvedFurniture.allFurniture,
       bounds,
     },
   };

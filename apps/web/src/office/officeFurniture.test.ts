@@ -1,48 +1,127 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  createDefaultOfficeFurniture,
+  createDefaultOfficeFurnitureForGroup,
   createOfficeFurniture,
   moveOfficeFurnitureWithChildren,
   removeOfficeFurniture,
+  resolveOfficeFurniture,
 } from "./officeFurniture";
+import type { OfficePersistedFurniture } from "./officeTypes";
 
 describe("officeFurniture", () => {
-  it("moves linked chairs when a conference table moves", () => {
-    const furniture = createDefaultOfficeFurniture();
-    const table = furniture.find((element) => element.id === "conference-table");
-    const chair = furniture.find((element) => element.id === "chair-1");
-    if (!table || !chair) {
-      throw new Error("Missing default conference furniture");
+  it("moves linked furniture by updating local offsets instead of absolute coordinates", () => {
+    const furniture = createDefaultOfficeFurnitureForGroup("group-a", []);
+    const table = furniture.find((element) => element.type === "conferenceTable");
+    if (!table || table.placement.kind !== "groupLinked") {
+      throw new Error("Missing linked table");
     }
 
-    const movedFurniture = moveOfficeFurnitureWithChildren(furniture, table.id, {
-      x: table.x + 80,
-      y: table.y + 24,
+    const movedFurniture = moveOfficeFurnitureWithChildren({
+      furniture,
+      movedId: table.id,
+      nextPoint: { x: 480, y: 340 },
+      groupAnchors: { "group-a": { x: 200, y: 100 } },
     });
     const movedTable = movedFurniture.find((element) => element.id === table.id);
-    const movedChair = movedFurniture.find((element) => element.id === chair.id);
 
-    expect(movedTable).toMatchObject({ x: table.x + 80, y: table.y + 24 });
-    expect(movedChair).toMatchObject({ x: chair.x + 80, y: chair.y + 24 });
+    expect(movedTable?.placement).toEqual({
+      kind: "groupLinked",
+      groupKey: "group-a",
+      offset: { x: 280, y: 240 },
+    });
+  });
+
+  it("moves linked children when a linked parent moves", () => {
+    const furniture: OfficePersistedFurniture[] = [
+      {
+        id: "group:group-a:table",
+        type: "conferenceTable",
+        width: 256,
+        height: 96,
+        draggable: true,
+        placement: {
+          kind: "groupLinked",
+          groupKey: "group-a",
+          offset: { x: 20, y: 30 },
+        },
+      },
+      {
+        id: "group:group-a:chair",
+        type: "chair",
+        width: 16,
+        height: 16,
+        draggable: true,
+        parentId: "group:group-a:table",
+        placement: {
+          kind: "groupLinked",
+          groupKey: "group-a",
+          offset: { x: 44, y: 48 },
+        },
+      },
+    ];
+
+    const movedFurniture = moveOfficeFurnitureWithChildren({
+      furniture,
+      movedId: "group:group-a:table",
+      nextPoint: { x: 320, y: 260 },
+      groupAnchors: { "group-a": { x: 200, y: 100 } },
+    });
+
+    expect(movedFurniture.find((element) => element.id === "group:group-a:table")?.placement).toEqual({
+      kind: "groupLinked",
+      groupKey: "group-a",
+      offset: { x: 120, y: 160 },
+    });
+    expect(movedFurniture.find((element) => element.id === "group:group-a:chair")?.placement).toEqual({
+      kind: "groupLinked",
+      groupKey: "group-a",
+      offset: { x: 144, y: 178 },
+    });
+  });
+
+  it("keeps floating furniture absolute when moved", () => {
+    const [plant] = createOfficeFurniture("plant", { x: 300, y: 200 }, []);
+    if (!plant) {
+      throw new Error("Missing plant");
+    }
+    const movedFurniture = moveOfficeFurnitureWithChildren({
+      furniture: [plant],
+      movedId: plant.id,
+      nextPoint: { x: 420, y: 310 },
+      groupAnchors: {},
+    });
+
+    expect(movedFurniture[0]?.placement).toEqual({
+      kind: "floating",
+      position: { x: 420, y: 310 },
+    });
+  });
+
+  it("produces congregation targets from resolved office furniture", () => {
+    const furniture = createDefaultOfficeFurnitureForGroup("group-a", []);
+    const resolved = resolveOfficeFurniture({
+      furniture,
+      groupAnchors: { "group-a": { x: 200, y: 100 } },
+    });
+
+    const targets = resolved.congregationTargetsByGroupKey["group-a"] ?? [];
+    expect(targets.some((target) => target.furnitureType === "conferenceTable")).toBe(true);
+    expect(targets.some((target) => target.furnitureType === "coffeeBar")).toBe(true);
+    expect(targets.some((target) => target.furnitureType === "waterCooler")).toBe(true);
+    expect(targets.some((target) => target.furnitureType === "plant")).toBe(true);
   });
 
   it("removes descendant furniture when deleting a parent set", () => {
-    const furniture = createDefaultOfficeFurniture();
+    const furniture = createOfficeFurniture("conferenceSet", { x: 800, y: 420 }, []);
+    const table = furniture.find((element) => element.type === "conferenceTable");
+    if (!table) {
+      throw new Error("Missing conference table");
+    }
 
-    const nextFurniture = removeOfficeFurniture(furniture, "conference-table");
+    const nextFurniture = removeOfficeFurniture(furniture, table.id);
 
-    expect(nextFurniture.some((element) => element.id === "conference-table")).toBe(false);
-    expect(nextFurniture.some((element) => element.parentId === "conference-table")).toBe(false);
-  });
-
-  it("creates a boardroom set with linked chairs", () => {
-    const created = createOfficeFurniture("conferenceSet", { x: 800, y: 420 }, []);
-    const table = created.find((element) => element.type === "conferenceTable");
-    const chairs = created.filter((element) => element.type === "chair");
-
-    expect(table).toBeTruthy();
-    expect(chairs).toHaveLength(8);
-    expect(chairs.every((element) => element.parentId === table?.id)).toBe(true);
+    expect(nextFurniture.some((element) => element.id === table.id)).toBe(false);
+    expect(nextFurniture.some((element) => element.parentId === table.id)).toBe(false);
   });
 });
