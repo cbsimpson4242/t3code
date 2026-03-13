@@ -16,6 +16,7 @@ import { Button } from "./ui/button";
 import OfficeAgentCreateDialog from "./OfficeAgentCreateDialog";
 import OfficeAdminWindow from "./OfficeAdminWindow";
 import OfficeThreadWindow, {
+  buildDefaultOfficeAdminWindowRect,
   buildDefaultOfficeThreadWindowRect,
   normalizeOfficeThreadWindowRect,
   type OfficeThreadWindowRect,
@@ -818,16 +819,16 @@ export default function VirtualOffice({ onOpenThreadInMainWindow }: VirtualOffic
 
   const openAdminWindow = useCallback(() => {
     setIsAdminWindowFocused(true);
-      setAdminWindowRect((current) =>
-        current ??
-        buildDefaultOfficeThreadWindowRect(
-          {
-            x: officeState.adminDeskPosition.x + ADMIN_DESK_WIDTH,
-            y: officeState.adminDeskPosition.y + 32,
-          },
-          0,
-        ),
-      );
+    setAdminWindowRect((current) =>
+      current ??
+      buildDefaultOfficeAdminWindowRect(
+        {
+          x: officeState.adminDeskPosition.x + ADMIN_DESK_WIDTH,
+          y: officeState.adminDeskPosition.y + 32,
+        },
+        0,
+      ),
+    );
   }, [officeState.adminDeskPosition.x, officeState.adminDeskPosition.y]);
 
   const closeAdminWindow = useCallback(() => {

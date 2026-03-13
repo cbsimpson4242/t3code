@@ -32,6 +32,23 @@ describe("officeFurniture", () => {
     });
   });
 
+  it("seeds the default office furniture in the new individual office layout", () => {
+    const furniture = createDefaultOfficeFurnitureForGroup("group-a", []);
+    const placementsById = new Map(
+      furniture.flatMap((element) =>
+        element.placement.kind === "groupLinked"
+          ? [[element.id, element.placement.offset] as const]
+          : [],
+      ),
+    );
+
+    expect(placementsById.get("group:group-a:water-cooler")).toEqual({ x: 18, y: 184 });
+    expect(placementsById.get("group:group-a:conference-table")).toEqual({ x: 118, y: 286 });
+    expect(placementsById.get("group:group-a:coffee-bar")).toEqual({ x: 386, y: 166 });
+    expect(placementsById.get("group:group-a:plant-left")).toEqual({ x: 26, y: 426 });
+    expect(placementsById.get("group:group-a:plant-right")).toEqual({ x: 402, y: 426 });
+  });
+
   it("moves linked children when a linked parent moves", () => {
     const furniture: OfficePersistedFurniture[] = [
       {

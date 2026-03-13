@@ -233,6 +233,26 @@ describe("officeLayout", () => {
     expect(tableAfter?.y).toBe(tableBefore.y + 75);
   });
 
+  it("places the first three desks across the top row of an individual office", () => {
+    const projects = [makeProject("project-1", "project-a")];
+    const threads = [
+      makeThread({ id: "thread-1", projectId: "project-1", title: "Thread 1", worktreePath: "group-a" }),
+      makeThread({ id: "thread-2", projectId: "project-1", title: "Thread 2", worktreePath: "group-a" }),
+      makeThread({ id: "thread-3", projectId: "project-1", title: "Thread 3", worktreePath: "group-a" }),
+    ];
+
+    const build = buildOfficeScene({
+      ...deriveOfficeInputs(projects, threads),
+      persistedState: createDefaultOfficePersistedState(),
+    });
+
+    expect(build.persistedState.deskOffsetsByThreadId).toMatchObject({
+      "thread-1": { x: 18, y: 32 },
+      "thread-2": { x: 186, y: 32 },
+      "thread-3": { x: 354, y: 32 },
+    });
+  });
+
   it("expands group bounds to include linked furniture", () => {
     const projects = [makeProject("project-1", "project-a")];
     const threads = [makeThread({ id: "thread-1", projectId: "project-1", title: "Thread 1", worktreePath: "group-a" })];
@@ -250,6 +270,26 @@ describe("officeLayout", () => {
       expect(furniture.x + furniture.width).toBeLessThanOrEqual(group.element.x + group.element.width);
       expect(furniture.y + furniture.height).toBeLessThanOrEqual(group.element.y + group.element.height);
     }
+  });
+
+  it("spaces default offices far enough apart to avoid overlap", () => {
+    const projects = [makeProject("project-1", "project-a"), makeProject("project-2", "project-b")];
+    const threads = [
+      makeThread({ id: "thread-1", projectId: "project-1", title: "Thread 1", worktreePath: "group-a" }),
+      makeThread({ id: "thread-2", projectId: "project-2", title: "Thread 2", worktreePath: "group-b" }),
+    ];
+
+    const build = buildOfficeScene({
+      ...deriveOfficeInputs(projects, threads),
+      persistedState: createDefaultOfficePersistedState(),
+    });
+    const groupA = build.scene.groups.find((group) => group.key === "group-a");
+    const groupB = build.scene.groups.find((group) => group.key === "group-b");
+    if (!groupA || !groupB) {
+      throw new Error("Missing default office groups");
+    }
+
+    expect(groupB.element.x).toBeGreaterThanOrEqual(groupA.element.x + groupA.element.width + 32);
   });
 
   it("does not let one group's furniture or congregation targets appear in another office", () => {

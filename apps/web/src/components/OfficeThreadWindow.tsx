@@ -8,8 +8,10 @@ import { SidebarProvider } from "~/components/ui/sidebar";
 import type { OfficePoint } from "~/office/officeTypes";
 import type { Project, Thread } from "~/types";
 
-const DEFAULT_WINDOW_WIDTH = 920;
-const DEFAULT_WINDOW_HEIGHT = 620;
+const DEFAULT_CHAT_WINDOW_WIDTH = 1060;
+const DEFAULT_CHAT_WINDOW_HEIGHT = 760;
+const DEFAULT_ADMIN_WINDOW_WIDTH = 920;
+const DEFAULT_ADMIN_WINDOW_HEIGHT = 620;
 const MIN_WINDOW_WIDTH = 420;
 const MIN_WINDOW_HEIGHT = 300;
 const WINDOW_CASCADE_OFFSET = 28;
@@ -70,20 +72,61 @@ export function normalizeOfficeThreadWindowRect(rect: OfficeThreadWindowRect): O
   };
 }
 
+function buildDefaultOfficeWindowRect(
+  anchor: OfficePoint,
+  size: { width: number; height: number },
+  stackIndex = 0,
+): OfficeThreadWindowRect {
+  const cascadeStep = mod(stackIndex, 6) * WINDOW_CASCADE_OFFSET;
+
+  return normalizeOfficeThreadWindowRect({
+    width: size.width,
+    height: size.height,
+    x: anchor.x + 64 + cascadeStep,
+    y: anchor.y - 72 + cascadeStep * 0.5,
+  });
+}
+
 export function buildDefaultOfficeThreadWindowRect(
   anchor: OfficePoint,
   stackIndex = 0,
 ): OfficeThreadWindowRect {
-  const width = DEFAULT_WINDOW_WIDTH;
-  const height = DEFAULT_WINDOW_HEIGHT;
-  const cascadeStep = mod(stackIndex, 6) * WINDOW_CASCADE_OFFSET;
+  return buildDefaultOfficeWindowRect(
+    anchor,
+    {
+      width: DEFAULT_CHAT_WINDOW_WIDTH,
+      height: DEFAULT_CHAT_WINDOW_HEIGHT,
+    },
+    stackIndex,
+  );
+}
 
-  return normalizeOfficeThreadWindowRect({
-    width,
-    height,
-    x: anchor.x + 64 + cascadeStep,
-    y: anchor.y - 72 + cascadeStep * 0.5,
-  });
+export function buildDefaultOfficeAdminWindowRect(
+  anchor: OfficePoint,
+  stackIndex = 0,
+): OfficeThreadWindowRect {
+  return buildDefaultOfficeWindowRect(
+    anchor,
+    {
+      width: DEFAULT_ADMIN_WINDOW_WIDTH,
+      height: DEFAULT_ADMIN_WINDOW_HEIGHT,
+    },
+    stackIndex,
+  );
+}
+
+export function getOfficeThreadWindowDefaultSize() {
+  return {
+    width: DEFAULT_CHAT_WINDOW_WIDTH,
+    height: DEFAULT_CHAT_WINDOW_HEIGHT,
+  };
+}
+
+export function getOfficeAdminWindowDefaultSize() {
+  return {
+    width: DEFAULT_ADMIN_WINDOW_WIDTH,
+    height: DEFAULT_ADMIN_WINDOW_HEIGHT,
+  };
 }
 
 function mod(value: number, divisor: number) {

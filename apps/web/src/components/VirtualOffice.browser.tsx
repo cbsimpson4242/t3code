@@ -8,6 +8,10 @@ import { render } from "vitest-browser-react";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Project, type Thread } from "../types";
+import {
+  getOfficeAdminWindowDefaultSize,
+  getOfficeThreadWindowDefaultSize,
+} from "./OfficeThreadWindow";
 import VirtualOffice from "./VirtualOffice";
 
 vi.mock("~/components/ChatView", async () => {
@@ -330,6 +334,11 @@ function getAdminWindow(): HTMLElement {
   return element;
 }
 
+function expectWindowToUseSize(element: HTMLElement, size: { width: number; height: number }) {
+  expect(element.style.width).toBe(`${size.width}px`);
+  expect(element.style.height).toBe(`${size.height}px`);
+}
+
 function getWindowButtonByText(threadId: string, text: string): HTMLButtonElement {
   const button = [...getWindow(threadId).querySelectorAll<HTMLButtonElement>("button")].find(
     (entry) => entry.textContent?.trim() === text,
@@ -472,6 +481,18 @@ describe("VirtualOffice interactions", () => {
       const summary = getRequiredElement<HTMLElement>("[data-office-thread-last-user-message='thread-a']");
       expect(summary.textContent).toContain("Last user message");
       expect(summary.textContent).toContain("Please update the deploy script");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens new chat windows at the larger default size", async () => {
+    const mounted = await mountOffice();
+    try {
+      getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").click();
+      await waitForOfficeLayout();
+
+      expectWindowToUseSize(getWindow("thread-a"), getOfficeThreadWindowDefaultSize());
     } finally {
       await mounted.cleanup();
     }
@@ -659,6 +680,50 @@ describe("VirtualOffice interactions", () => {
     }
   });
 
+  it("reuses an existing chat window instead of recreating its rect when reopening", async () => {
+    const mounted = await mountOffice();
+    try {
+      getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").click();
+      await waitForOfficeLayout();
+
+      const window = getWindow("thread-a");
+      const resizeHandle = window.querySelector<HTMLElement>("[data-office-thread-resize='corner']");
+      if (!resizeHandle) {
+        throw new Error("Missing corner resize handle");
+      }
+
+      dispatchPointerSequence(resizeHandle, {
+        pointerId: 10,
+        button: 0,
+        buttons: 1,
+        startX: window.getBoundingClientRect().right - 4,
+        startY: window.getBoundingClientRect().bottom - 4,
+        endX: window.getBoundingClientRect().right - 220,
+        endY: window.getBoundingClientRect().bottom - 160,
+      });
+      await waitForOfficeLayout();
+
+      const resizedWindow = getWindow("thread-a");
+      const resizedStyle = {
+        width: resizedWindow.style.width,
+        height: resizedWindow.style.height,
+      };
+      expect(resizedStyle.width).not.toBe(`${getOfficeThreadWindowDefaultSize().width}px`);
+      expect(document.querySelectorAll("[data-office-thread-window='thread-a']")).toHaveLength(1);
+
+      getRequiredElement<HTMLElement>("[data-office-desk='thread-b']").click();
+      await waitForOfficeLayout();
+      getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").click();
+      await waitForOfficeLayout();
+
+      expect(document.querySelectorAll("[data-office-thread-window='thread-a']")).toHaveLength(1);
+      expect(getWindow("thread-a").style.width).toBe(resizedStyle.width);
+      expect(getWindow("thread-a").style.height).toBe(resizedStyle.height);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("shows a live thought summary bubble above a running agent", async () => {
     useStore.setState((state) => ({
       ...state,
@@ -809,9 +874,14 @@ describe("VirtualOffice interactions", () => {
       expect(
         document.querySelector(`[data-office-desk='${draftThread?.threadId ?? ""}']`),
       ).toBeTruthy();
-      expect(
-        document.querySelector(`[data-office-thread-window='${draftThread?.threadId ?? ""}']`),
-      ).toBeTruthy();
+      const draftWindow = document.querySelector<HTMLElement>(
+        `[data-office-thread-window='${draftThread?.threadId ?? ""}']`,
+      );
+      expect(draftWindow).toBeTruthy();
+      if (!draftWindow) {
+        throw new Error("Missing created draft thread window");
+      }
+      expectWindowToUseSize(draftWindow, getOfficeThreadWindowDefaultSize());
     } finally {
       await mounted.cleanup();
     }
@@ -930,6 +1000,7 @@ describe("VirtualOffice interactions", () => {
       await waitForOfficeLayout();
 
       const adminWindow = getAdminWindow();
+      expectWindowToUseSize(adminWindow, getOfficeAdminWindowDefaultSize());
       expect(adminWindow.textContent).toContain("CEO Office");
       expect(adminWindow.textContent).toContain("alpha");
       expect(adminWindow.textContent).toContain("beta");

@@ -15,6 +15,7 @@ import {
 import { resolveOfficeGroupAccent } from "./officeColors";
 import {
   createDefaultOfficeFurnitureForGroup,
+  getDefaultOfficeFurnitureFootprint,
   resolveOfficeFurniture,
 } from "./officeFurniture";
 import type {
@@ -73,8 +74,11 @@ function nextGroupAnchor(existingAnchors: OfficePoint[]): OfficePoint {
   const rightMostAnchor = existingAnchors.reduce((best, candidate) =>
     candidate.x > best.x ? candidate : best,
   );
+  const defaultGroupFootprint = getDefaultOfficeFurnitureFootprint();
   return {
-    x: rightMostAnchor.x + DEFAULT_GROUP_APPEND_STEP.x,
+    x:
+      rightMostAnchor.x +
+      Math.max(DEFAULT_GROUP_APPEND_STEP.x, defaultGroupFootprint.minWidth + 72),
     y: rightMostAnchor.y + DEFAULT_GROUP_APPEND_STEP.y,
   };
 }
@@ -87,18 +91,11 @@ function clampGroupFrameSize(size: OfficeSize): OfficeSize {
 }
 
 function deskSlotCandidates(): OfficePoint[] {
-  const candidates: OfficePoint[] = [];
-  for (let row = 0; row < 10; row += 1) {
-    if (row === 0) {
-      candidates.push({ x: 102, y: 34 });
-    }
-    candidates.push({ x: 18, y: 34 + row * 70 });
-    candidates.push({ x: 186, y: 34 + row * 70 });
-    if (row > 0) {
-      candidates.push({ x: 102, y: 34 + row * 70 });
-    }
-  }
-  return candidates;
+  return [
+    { x: 18, y: 32 },
+    { x: 186, y: 32 },
+    { x: 354, y: 32 },
+  ];
 }
 
 const DEFAULT_DESK_SLOTS = deskSlotCandidates();
@@ -115,10 +112,10 @@ function nextDeskOffset(existingOffsets: OfficePoint[]): OfficePoint {
       return candidate;
     }
   }
-  const extraIndex = existingOffsets.length;
+  const extraIndex = existingOffsets.length - DEFAULT_DESK_SLOTS.length;
   return {
-    x: 18 + (extraIndex % 3) * 84,
-    y: 34 + Math.floor(extraIndex / 3) * 70,
+    x: 18 + (extraIndex % 3) * 168,
+    y: 532 + Math.floor(extraIndex / 3) * 84,
   };
 }
 

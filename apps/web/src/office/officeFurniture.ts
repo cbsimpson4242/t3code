@@ -63,11 +63,11 @@ const FURNITURE_BASE_IDS: Record<OfficeFurnitureType, string> = {
 };
 
 const DEFAULT_LINKED_FURNITURE_OFFSETS = {
-  waterCooler: { x: 8, y: 24 },
-  conferenceTable: { x: -16, y: 54 },
-  plantLeft: { x: 0, y: 160 },
-  plantRight: { x: 168, y: 160 },
-  coffeeBar: { x: 128, y: 4 },
+  waterCooler: { x: 18, y: 184 },
+  conferenceTable: { x: 118, y: 286 },
+  plantLeft: { x: 26, y: 426 },
+  plantRight: { x: 402, y: 426 },
+  coffeeBar: { x: 386, y: 166 },
 } as const satisfies Record<string, OfficePoint>;
 
 const LEGACY_DEFAULT_FURNITURE_IDS = new Set([
