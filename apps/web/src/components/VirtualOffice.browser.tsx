@@ -616,6 +616,29 @@ describe("VirtualOffice interactions", () => {
     }
   });
 
+  it("toggles a desk click between expanded and minimized chat states", async () => {
+    const mounted = await mountOffice();
+    try {
+      const desk = getRequiredElement<HTMLElement>("[data-office-desk='thread-a']");
+
+      desk.click();
+      await waitForOfficeLayout();
+      expect(document.querySelector("[data-office-thread-window='thread-a']")).toBeTruthy();
+
+      desk.click();
+      await waitForOfficeLayout();
+      expect(document.querySelector("[data-office-thread-window='thread-a']")).toBeNull();
+      expect(document.querySelector("[data-office-thread-window-preview='thread-a']")).toBeTruthy();
+
+      desk.click();
+      await waitForOfficeLayout();
+      expect(document.querySelector("[data-office-thread-window-preview='thread-a']")).toBeNull();
+      expect(document.querySelector("[data-office-thread-window='thread-a']")).toBeTruthy();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("opens the CEO office window at a stable size even when the camera is zoomed in", async () => {
     const mounted = await mountOffice();
     try {

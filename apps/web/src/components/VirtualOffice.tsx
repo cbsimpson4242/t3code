@@ -2052,9 +2052,14 @@ export default function VirtualOffice({
       if (shouldSuppressClick()) {
         return;
       }
+      const existingWindow = openWindows.find((entry) => entry.threadId === threadId);
+      if (existingWindow && existingWindow.minimized !== true) {
+        closeThreadWindow(threadId);
+        return;
+      }
       openThreadWindow(threadId);
     },
-    [openThreadWindow, shouldSuppressClick],
+    [closeThreadWindow, openThreadWindow, openWindows, shouldSuppressClick],
   );
 
   const openCreateDialog = useCallback((projectId: ProjectId | null = null) => {
