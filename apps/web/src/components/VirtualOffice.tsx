@@ -515,6 +515,9 @@ function OfficeGroupMenu(props: {
   scale?: number;
   style?: React.CSSProperties;
   onMenuPointerDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onMenuPointerMove?: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onMenuPointerUp?: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onMenuPointerCancel?: (event: React.PointerEvent<HTMLDivElement>) => void;
   onCreate: (group: OfficeSceneGroup) => void;
   onToggleCollapsed: (groupKey: string) => void;
   onDelete: (groupKey: string) => void;
@@ -527,6 +530,9 @@ function OfficeGroupMenu(props: {
     scale = 1,
     style,
     onMenuPointerDown,
+    onMenuPointerMove,
+    onMenuPointerUp,
+    onMenuPointerCancel,
     onCreate,
     onToggleCollapsed,
     onDelete,
@@ -578,6 +584,9 @@ function OfficeGroupMenu(props: {
         }
         event.stopPropagation();
       }}
+      onPointerMove={isFarMenu ? onMenuPointerMove : undefined}
+      onPointerUp={isFarMenu ? onMenuPointerUp : undefined}
+      onPointerCancel={isFarMenu ? onMenuPointerCancel : undefined}
       onClick={(event) => {
         event.stopPropagation();
       }}
@@ -2733,6 +2742,9 @@ export default function VirtualOffice({
           onMenuPointerDown={(event) => {
             startGroupDrag(group, event);
           }}
+          onMenuPointerMove={handleDragPointerMove}
+          onMenuPointerUp={handleDragPointerEnd}
+          onMenuPointerCancel={handleDragPointerEnd}
           onCreate={(nextGroup) => {
             openCreateDialog(
               nextGroup.deskThreadIds[0]
