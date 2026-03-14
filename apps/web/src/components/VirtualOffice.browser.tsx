@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { useComposerDraftStore } from "../composerDraftStore";
+import { OFFICE_LAYOUT_STORAGE_KEY, createDefaultOfficePersistedState } from "../office/officeDefaults";
 import { usePreviewStore } from "../previewStore";
 import { useStore } from "../store";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Project, type Thread } from "../types";
@@ -14,6 +15,7 @@ import {
   getOfficeAdminWindowDefaultSize,
   getOfficeThreadWindowDefaultSize,
 } from "./OfficeThreadWindow";
+import { getOfficeVsCodeWindowDefaultSize } from "./OfficeVsCodeWindow";
 import VirtualOffice from "./VirtualOffice";
 
 vi.mock("~/components/ChatView", async () => {
@@ -43,7 +45,7 @@ function makeThread(input: {
   id: string;
   projectId: string;
   title: string;
-  worktreePath: string;
+  worktreePath?: string | null;
   messages?: Thread["messages"];
 }): Thread {
   return {
@@ -61,7 +63,7 @@ function makeThread(input: {
     createdAt: "2026-03-10T00:00:00.000Z",
     latestTurn: null,
     branch: null,
-    worktreePath: input.worktreePath,
+    worktreePath: input.worktreePath ?? null,
     turnDiffSummaries: [],
     activities: [],
   };
@@ -128,12 +130,39 @@ function seedOfficeStore() {
   });
 }
 
+const nativeApiPickFolder = vi.fn<() => Promise<string | null>>(async () => null);
+const nativeApiConfirm = vi.fn<(message: string) => Promise<boolean>>(async () => false);
+const nativeApiDispatchCommand = vi.fn<
+  (command: { type: string; projectId?: string; title?: string; workspaceRoot?: string }) => Promise<{
+    sequence: number;
+  }>
+>(async () => ({ sequence: 1 }));
+const nativeApiOpenInEditor = vi.fn<(cwd: string, editor: string) => Promise<void>>(async () => undefined);
+const nativeApiStub = {
+  dialogs: {
+    pickFolder: nativeApiPickFolder,
+    confirm: nativeApiConfirm,
+  },
+  orchestration: {
+    dispatchCommand: nativeApiDispatchCommand,
+  },
+  shell: {
+    openInEditor: nativeApiOpenInEditor,
+  },
+} as never;
+
 function waitForOfficeLayout() {
   return new Promise<void>((resolve) => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => resolve());
     });
   });
+}
+
+function seedExpandedOfficeLayout() {
+  const state = createDefaultOfficePersistedState();
+  state.expandedGroupKeys = ["group-a", "group-b", "group-c"];
+  localStorage.setItem(OFFICE_LAYOUT_STORAGE_KEY, JSON.stringify(state));
 }
 
 function getRequiredElement<T extends Element = HTMLElement>(selector: string): T {
@@ -268,6 +297,25 @@ async function dragBrowserWindow(groupKey: string, delta: { x: number; y: number
   await waitForOfficeLayout();
 }
 
+async function dragVsCodeWindow(groupKey: string, delta: { x: number; y: number }) {
+  const window = getVsCodeWindow(groupKey);
+  const header = window.firstElementChild;
+  if (!(header instanceof HTMLElement)) {
+    throw new Error(`Missing VS Code window header for ${groupKey}`);
+  }
+  const rect = header.getBoundingClientRect();
+  dispatchPointerSequence(header, {
+    pointerId: 12,
+    button: 0,
+    buttons: 1,
+    startX: rect.left + rect.width / 2,
+    startY: rect.top + rect.height / 2,
+    endX: rect.left + rect.width / 2 + delta.x,
+    endY: rect.top + rect.height / 2 + delta.y,
+  });
+  await waitForOfficeLayout();
+}
+
 async function clickSelector(selector: string) {
   const element = getRequiredElement<HTMLElement>(selector);
   const rect = element.getBoundingClientRect();
@@ -326,6 +374,25 @@ async function panViewport(delta: { x: number; y: number }) {
     startY: rect.top + rect.height / 2,
     endX: rect.left + rect.width / 2 + delta.x,
     endY: rect.top + rect.height / 2 + delta.y,
+  });
+  await waitForOfficeLayout();
+}
+
+async function dragViewportSelectionBox(input: {
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+}) {
+  const viewport = getRequiredElement<HTMLElement>("[data-testid='virtual-office-viewport']");
+  dispatchPointerSequence(viewport, {
+    pointerId: 21,
+    button: 0,
+    buttons: 1,
+    startX: input.startX,
+    startY: input.startY,
+    endX: input.endX,
+    endY: input.endY,
   });
   await waitForOfficeLayout();
 }
@@ -394,6 +461,14 @@ function getWindow(threadId: string): HTMLElement {
   return element;
 }
 
+function getScaledWorldLayer(): HTMLElement {
+  const element = document.querySelector<HTMLElement>(".will-change-transform");
+  if (!element) {
+    throw new Error("Missing scaled world layer");
+  }
+  return element;
+}
+
 function getAdminWindow(): HTMLElement {
   const element = document.querySelector<HTMLElement>("[data-office-admin-window='office-admin']");
   if (!element) {
@@ -406,6 +481,14 @@ function getBrowserWindow(groupKey: string): HTMLElement {
   const element = document.querySelector<HTMLElement>(`[data-office-browser-window='${groupKey}']`);
   if (!element) {
     throw new Error(`Missing office browser window: ${groupKey}`);
+  }
+  return element;
+}
+
+function getVsCodeWindow(groupKey: string): HTMLElement {
+  const element = document.querySelector<HTMLElement>(`[data-office-vscode-window='${groupKey}']`);
+  if (!element) {
+    throw new Error(`Missing office VS Code window: ${groupKey}`);
   }
   return element;
 }
@@ -462,12 +545,24 @@ describe("VirtualOffice interactions", () => {
     localStorage.clear();
     document.body.innerHTML = "";
     seedOfficeStore();
+    seedExpandedOfficeLayout();
     usePreviewStore.getState().clear();
+    nativeApiPickFolder.mockReset();
+    nativeApiPickFolder.mockResolvedValue(null);
+    nativeApiConfirm.mockReset();
+    nativeApiConfirm.mockResolvedValue(false);
+    nativeApiDispatchCommand.mockReset();
+    nativeApiDispatchCommand.mockResolvedValue({ sequence: 1 });
+    nativeApiOpenInEditor.mockReset();
+    nativeApiOpenInEditor.mockResolvedValue(undefined);
+    window.nativeApi = nativeApiStub;
+    Reflect.deleteProperty(window, "desktopBridge");
   });
 
   afterEach(() => {
     document.body.innerHTML = "";
     Reflect.deleteProperty(window, "nativeApi");
+    Reflect.deleteProperty(window, "desktopBridge");
     usePreviewStore.getState().clear();
   });
 
@@ -495,6 +590,35 @@ describe("VirtualOffice interactions", () => {
       await panViewport({ x: 120, y: 64 });
       expect(readCameraAttr("data-camera-x")).not.toBe(xBefore);
       expect(readCameraAttr("data-camera-y")).not.toBe(yBefore);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows large office labels when zoomed out", async () => {
+    const mounted = await mountOffice();
+    try {
+      const viewport = getRequiredElement<HTMLElement>("[data-testid='virtual-office-viewport']");
+      const rect = viewport.getBoundingClientRect();
+
+      for (let index = 0; index < 3; index += 1) {
+        viewport.dispatchEvent(
+          new WheelEvent("wheel", {
+            bubbles: true,
+            clientX: rect.left + rect.width / 2,
+            clientY: rect.top + rect.height / 2,
+            deltaY: 320,
+          }),
+        );
+        await waitForOfficeLayout();
+      }
+
+      expect(getRequiredElement<HTMLElement>("[data-office-far-label='group-a']").textContent).toContain(
+        "group-a",
+      );
+      expect(getRequiredElement<HTMLElement>("[data-office-far-label='group-b']").textContent).toContain(
+        "group-b",
+      );
     } finally {
       await mounted.cleanup();
     }
@@ -555,6 +679,145 @@ describe("VirtualOffice interactions", () => {
       const windowAfterZoom = getWindow("thread-a").getBoundingClientRect();
       expect(windowAfterZoom.width).toBeGreaterThan(windowAfterPan.width + 60);
       expect(windowAfterZoom.height).toBeGreaterThan(windowAfterPan.height + 40);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens the CEO office window at a stable size even when the camera is zoomed in", async () => {
+    const mounted = await mountOffice();
+    try {
+      const viewport = getRequiredElement<HTMLElement>("[data-testid='virtual-office-viewport']");
+      const viewportRect = viewport.getBoundingClientRect();
+
+      for (let index = 0; index < 4; index += 1) {
+        viewport.dispatchEvent(
+          new WheelEvent("wheel", {
+            bubbles: true,
+            clientX: viewportRect.left + viewportRect.width / 2,
+            clientY: viewportRect.top + viewportRect.height / 2,
+            deltaY: -220,
+          }),
+        );
+        await waitForOfficeLayout();
+      }
+
+      const clickPoint = await rightClickSelector("[data-testid='virtual-office-viewport']", {
+        x: 360,
+        y: 280,
+      });
+
+      const adminWindow = getAdminWindow();
+      const rect = adminWindow.getBoundingClientRect();
+      const defaultSize = getOfficeAdminWindowDefaultSize();
+
+      expect(rect.width).toBeCloseTo(defaultSize.width, 0);
+      expect(rect.height).toBeCloseTo(defaultSize.height, 0);
+      expect(Math.abs(rect.left - clickPoint.x)).toBeLessThan(24);
+      expect(Math.abs(rect.top - clickPoint.y)).toBeLessThan(24);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the CEO office window visible when the office auto-minimizes other windows", async () => {
+    const mounted = await mountOffice();
+    try {
+      await rightClickSelector("[data-testid='virtual-office-viewport']", {
+        x: 360,
+        y: 280,
+      });
+
+      expect(getAdminWindow().textContent).toContain("CEO Office");
+
+      const viewport = getRequiredElement<HTMLElement>("[data-testid='virtual-office-viewport']");
+      const rect = viewport.getBoundingClientRect();
+
+      for (let index = 0; index < 5; index += 1) {
+        viewport.dispatchEvent(
+          new WheelEvent("wheel", {
+            bubbles: true,
+            clientX: rect.left + rect.width / 2,
+            clientY: rect.top + rect.height / 2,
+            deltaY: 320,
+          }),
+        );
+        await waitForOfficeLayout();
+      }
+
+      expect(readCameraAttr("data-camera-zoom")).toBeLessThan(0.8);
+      expect(
+        getRequiredElement<HTMLElement>("[data-testid='virtual-office-viewport']").dataset.officeWindowsMinimized,
+      ).toBe("true");
+      expect(getAdminWindow().textContent).toContain("CEO Office");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("renders office thread windows outside the scaled world layer", async () => {
+    const mounted = await mountOffice();
+    try {
+      getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").click();
+      await waitForOfficeLayout();
+
+      const threadWindow = getWindow("thread-a");
+      expect(getScaledWorldLayer().contains(threadWindow)).toBe(false);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("auto-minimizes office windows when zoomed far out and restores them when zooming back in", async () => {
+    const mounted = await mountOffice();
+    try {
+      getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").click();
+      await waitForOfficeLayout();
+
+      expect(document.querySelector("[data-office-thread-window='thread-a']")).toBeTruthy();
+
+      const viewport = getRequiredElement<HTMLElement>("[data-testid='virtual-office-viewport']");
+      const rect = viewport.getBoundingClientRect();
+
+      for (let index = 0; index < 5; index += 1) {
+        viewport.dispatchEvent(
+          new WheelEvent("wheel", {
+            bubbles: true,
+            clientX: rect.left + rect.width / 2,
+            clientY: rect.top + rect.height / 2,
+            deltaY: 320,
+          }),
+        );
+        await waitForOfficeLayout();
+      }
+
+      expect(readCameraAttr("data-camera-zoom")).toBeLessThan(0.8);
+      expect(
+        getRequiredElement<HTMLElement>("[data-testid='virtual-office-viewport']").dataset.officeWindowsMinimized,
+      ).toBe("true");
+      expect(document.querySelector("[data-office-thread-window-preview='thread-a']")).toBeTruthy();
+      expect(document.querySelector("[data-office-thread-last-user-message-preview='thread-a']")?.textContent).toContain(
+        "Last user message",
+      );
+
+      for (let index = 0; index < 6; index += 1) {
+        viewport.dispatchEvent(
+          new WheelEvent("wheel", {
+            bubbles: true,
+            clientX: rect.left + rect.width / 2,
+            clientY: rect.top + rect.height / 2,
+            deltaY: -260,
+          }),
+        );
+        await waitForOfficeLayout();
+      }
+
+      expect(readCameraAttr("data-camera-zoom")).toBeGreaterThan(0.88);
+      expect(
+        getRequiredElement<HTMLElement>("[data-testid='virtual-office-viewport']").dataset.officeWindowsMinimized,
+      ).toBe("false");
+      expect(document.querySelector("[data-office-thread-window-preview='thread-a']")).toBeNull();
+      expect(document.querySelector("[data-office-thread-window='thread-a']")).toBeTruthy();
     } finally {
       await mounted.cleanup();
     }
@@ -736,19 +999,21 @@ describe("VirtualOffice interactions", () => {
       getWindowButtonByAriaLabel("thread-b", "Close office thread window").click();
       await waitForOfficeLayout();
       expect(document.querySelector("[data-office-thread-window='thread-b']")).toBeNull();
+      expect(document.querySelector("[data-office-thread-window-preview='thread-b']")).toBeTruthy();
       expect(getWindow("thread-a")).toBeTruthy();
 
       getWindowButtonByAriaLabel("thread-a", "Close office thread window").click();
       await waitForOfficeLayout();
       await dragSelector("[data-office-desk='thread-a']", { x: 70, y: 20 });
       expect(document.querySelector("[data-office-thread-window='thread-a']")).toBeNull();
+      expect(document.querySelector("[data-office-thread-window-preview='thread-a']")).toBeTruthy();
       expect(mounted.activations).toEqual([]);
     } finally {
       await mounted.cleanup();
     }
   });
 
-  it("reuses an existing chat window instead of recreating its rect when reopening", async () => {
+  it("restores a minimized chat window to the same rect when reopening", async () => {
     const mounted = await mountOffice();
     try {
       getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").click();
@@ -776,17 +1041,61 @@ describe("VirtualOffice interactions", () => {
         width: resizedWindow.style.width,
         height: resizedWindow.style.height,
       };
+      const resizedRect = resizedWindow.getBoundingClientRect();
       expect(resizedStyle.width).not.toBe(`${getOfficeThreadWindowDefaultSize().width}px`);
       expect(document.querySelectorAll("[data-office-thread-window='thread-a']")).toHaveLength(1);
 
-      getRequiredElement<HTMLElement>("[data-office-desk='thread-b']").click();
+      getWindowButtonByAriaLabel("thread-a", "Close office thread window").click();
       await waitForOfficeLayout();
+      expect(document.querySelector("[data-office-thread-window='thread-a']")).toBeNull();
+      expect(document.querySelector("[data-office-thread-window-preview='thread-a']")).toBeTruthy();
+
       getRequiredElement<HTMLElement>("[data-office-desk='thread-a']").click();
       await waitForOfficeLayout();
 
       expect(document.querySelectorAll("[data-office-thread-window='thread-a']")).toHaveLength(1);
       expect(getWindow("thread-a").style.width).toBe(resizedStyle.width);
       expect(getWindow("thread-a").style.height).toBe(resizedStyle.height);
+      const restoredRect = getWindow("thread-a").getBoundingClientRect();
+      expect(restoredRect.x).toBeCloseTo(resizedRect.x, 0);
+      expect(restoredRect.y).toBeCloseTo(resizedRect.y, 0);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("selects multiple offices with a left-drag box and moves them together", async () => {
+    const mounted = await mountOffice();
+    try {
+      const groupA = getRequiredElement<HTMLElement>("[data-office-group='group-a']");
+      const groupB = getRequiredElement<HTMLElement>("[data-office-group='group-b']");
+      const groupABefore = groupA.getBoundingClientRect();
+      const groupBBefore = groupB.getBoundingClientRect();
+
+      await dragViewportSelectionBox({
+        startX: groupABefore.left - 16,
+        startY: groupABefore.top - 16,
+        endX: groupBBefore.right + 16,
+        endY: Math.max(groupABefore.bottom, groupBBefore.bottom) + 16,
+      });
+
+      expect(groupA.dataset.officeGroupSelected).toBe("true");
+      expect(groupB.dataset.officeGroupSelected).toBe("true");
+      expect(document.querySelector("[data-office-group-selection-box]")).toBeNull();
+
+      await dragSelector("[data-office-group='group-a']", { x: 96, y: 42 });
+
+      const groupAAfter = getRequiredElement<HTMLElement>(
+        "[data-office-group='group-a']",
+      ).getBoundingClientRect();
+      const groupBAfter = getRequiredElement<HTMLElement>(
+        "[data-office-group='group-b']",
+      ).getBoundingClientRect();
+
+      expect(groupAAfter.x).toBeGreaterThan(groupABefore.x + 60);
+      expect(groupAAfter.y).toBeGreaterThan(groupABefore.y + 20);
+      expect(groupBAfter.x).toBeGreaterThan(groupBBefore.x + 60);
+      expect(groupBAfter.y).toBeGreaterThan(groupBBefore.y + 20);
     } finally {
       await mounted.cleanup();
     }
@@ -1018,7 +1327,12 @@ describe("VirtualOffice interactions", () => {
   it("renders a minimap with office markers and open window indicators", async () => {
     const mounted = await mountOffice();
     try {
-      expect(document.querySelector("[data-office-minimap]")).toBeTruthy();
+      const minimap = getRequiredElement<HTMLElement>("[data-office-minimap]");
+      expect(minimap).toBeTruthy();
+      expect(minimap.style.width).toBe("320px");
+      expect(minimap.style.height).toBe("220px");
+      expect(getRequiredElement<HTMLElement>("[data-office-shortcut='group-a']").textContent).toContain("group-a");
+      expect(getRequiredElement<HTMLElement>("[data-office-shortcut='group-b']").textContent).toContain("group-b");
       expect(document.querySelector("[data-office-minimap-group='group-a']")).toBeTruthy();
       expect(document.querySelector("[data-office-minimap-group='group-b']")).toBeTruthy();
       expect(document.querySelector("[data-office-minimap-desk='thread-a']")).toBeTruthy();
@@ -1028,6 +1342,97 @@ describe("VirtualOffice interactions", () => {
       await waitForOfficeLayout();
 
       expect(document.querySelector("[data-office-minimap-window='thread:thread-a']")).toBeTruthy();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("centers the camera on an office from the shortcut list", async () => {
+    const mounted = await mountOffice();
+    try {
+      await panViewport({ x: -220, y: -40 });
+
+      const viewport = getRequiredElement<HTMLElement>("[data-testid='virtual-office-viewport']");
+      const viewportRect = viewport.getBoundingClientRect();
+      const viewportCenterX = viewportRect.left + viewportRect.width / 2;
+      const viewportCenterY = viewportRect.top + viewportRect.height / 2;
+
+      const groupBefore = getRequiredElement<HTMLElement>("[data-office-group='group-b']").getBoundingClientRect();
+      const beforeCenterX = groupBefore.left + groupBefore.width / 2;
+      const beforeCenterY = groupBefore.top + groupBefore.height / 2;
+      expect(Math.abs(beforeCenterX - viewportCenterX)).toBeGreaterThan(120);
+      expect(Math.abs(beforeCenterY - viewportCenterY)).toBeLessThan(200);
+
+      await clickSelector("[data-office-shortcut='group-b']");
+
+      const groupAfter = getRequiredElement<HTMLElement>("[data-office-group='group-b']").getBoundingClientRect();
+      const afterCenterX = groupAfter.left + groupAfter.width / 2;
+      const afterCenterY = groupAfter.top + groupAfter.height / 2;
+      expect(Math.abs(afterCenterX - viewportCenterX)).toBeLessThan(24);
+      expect(Math.abs(afterCenterY - viewportCenterY)).toBeLessThan(24);
+      expect(getRequiredElement<HTMLElement>("[data-office-shortcut='group-b']").textContent).toContain("Centered");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("starts with offices collapsed when no office layout is saved", async () => {
+    localStorage.clear();
+
+    const mounted = await mountOffice();
+    try {
+      expect(getRequiredElement<HTMLElement>("[data-office-group='group-a']").dataset.officeGroupCollapsed).toBe("true");
+      expect(document.querySelector("[data-office-desk='thread-a']")).toBeNull();
+
+      await clickSelector("[data-office-group-collapse='group-a']");
+
+      expect(getRequiredElement<HTMLElement>("[data-office-group='group-a']").dataset.officeGroupCollapsed).toBe(
+        undefined,
+      );
+      expect(document.querySelector("[data-office-desk='thread-a']")).toBeTruthy();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("collapses and expands an office from its top bar", async () => {
+    const mounted = await mountOffice();
+    try {
+      const group = getRequiredElement<HTMLElement>("[data-office-group='group-a']");
+      const groupBefore = group.getBoundingClientRect();
+      expect(document.querySelector("[data-office-desk='thread-a']")).toBeTruthy();
+      expect(getComputedStyle(group).overflow).toBe("visible");
+
+      await clickSelector("[data-office-group-collapse='group-a']");
+
+      const groupCollapsed = getRequiredElement<HTMLElement>("[data-office-group='group-a']").getBoundingClientRect();
+      expect(groupCollapsed.height).toBeLessThan(groupBefore.height / 2);
+      expect(getRequiredElement<HTMLElement>("[data-office-group='group-a']").dataset.officeGroupCollapsed).toBe("true");
+      expect(getComputedStyle(getRequiredElement<HTMLElement>("[data-office-group='group-a']")).overflow).toBe("hidden");
+      expect(document.querySelector("[data-office-desk='thread-a']")).toBeNull();
+
+      await clickSelector("[data-office-group-collapse='group-a']");
+
+      expect(getRequiredElement<HTMLElement>("[data-office-group='group-a']").dataset.officeGroupCollapsed).toBe(undefined);
+      expect(getComputedStyle(getRequiredElement<HTMLElement>("[data-office-group='group-a']")).overflow).toBe(
+        "visible",
+      );
+      expect(document.querySelector("[data-office-desk='thread-a']")).toBeTruthy();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("warns before deleting an office and removes it from the layout when confirmed", async () => {
+    nativeApiConfirm.mockResolvedValue(true);
+
+    const mounted = await mountOffice();
+    try {
+      await clickDomSelector("[data-office-group-delete='group-a']");
+
+      expect(nativeApiConfirm).toHaveBeenCalledWith(expect.stringContaining("Remove group-a from the office view?"));
+      expect(document.querySelector("[data-office-group='group-a']")).toBeNull();
+      expect(document.querySelector("[data-office-shortcut='group-a']")).toBeNull();
     } finally {
       await mounted.cleanup();
     }
@@ -1142,17 +1547,17 @@ describe("VirtualOffice interactions", () => {
   });
 
   it("opens the CEO office window and lists active projects, including a newly added folder project", async () => {
-    const pickFolder = vi.fn().mockResolvedValue("/repo/gamma");
-    const dispatchCommand = vi.fn().mockImplementation(async (command: { type: string; projectId: string; title: string; workspaceRoot: string }) => {
+    nativeApiPickFolder.mockResolvedValue("/repo/gamma");
+    nativeApiDispatchCommand.mockImplementation(async (command) => {
       if (command.type === "project.create") {
         useStore.setState((state) => ({
           ...state,
           projects: [
             ...state.projects,
             {
-              id: ProjectId.makeUnsafe(command.projectId),
-              name: command.title,
-              cwd: command.workspaceRoot,
+              id: ProjectId.makeUnsafe(command.projectId ?? "project-gamma"),
+              name: command.title ?? "gamma",
+              cwd: command.workspaceRoot ?? "/repo/gamma",
               model: "gpt-5-codex",
               expanded: true,
               scripts: [],
@@ -1160,16 +1565,8 @@ describe("VirtualOffice interactions", () => {
           ],
         }));
       }
+      return { sequence: 1 };
     });
-    window.nativeApi = {
-      dialogs: {
-        pickFolder,
-        confirm: vi.fn(),
-      },
-      orchestration: {
-        dispatchCommand,
-      },
-    } as never;
 
     const mounted = await mountOffice();
     try {
@@ -1185,8 +1582,8 @@ describe("VirtualOffice interactions", () => {
       await waitForOfficeLayout();
       await waitForOfficeLayout();
 
-      expect(pickFolder).toHaveBeenCalledOnce();
-      expect(dispatchCommand).toHaveBeenCalledWith(
+      expect(nativeApiPickFolder).toHaveBeenCalledOnce();
+      expect(nativeApiDispatchCommand).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "project.create",
           workspaceRoot: "/repo/gamma",
@@ -1291,6 +1688,129 @@ describe("VirtualOffice interactions", () => {
     try {
       expect(document.querySelector("[data-office-tv='group-a']")).toBeTruthy();
       expect(document.querySelector("[data-office-tv='group-b']")).toBeTruthy();
+      expect(document.querySelector("[data-office-server-rack='group-a']")).toBeTruthy();
+      expect(document.querySelector("[data-office-server-rack='group-b']")).toBeTruthy();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens a linked VS Code window from the server rack, reuses it while open, and relaunches explicitly", async () => {
+    window.desktopBridge = {} as never;
+
+    const mounted = await mountOffice();
+    try {
+      await clickSelector("[data-office-server-rack='group-a']");
+
+      const vsCodeWindow = getVsCodeWindow("group-a");
+      expectWindowToUseSize(vsCodeWindow, getOfficeVsCodeWindowDefaultSize());
+      expect(vsCodeWindow.textContent).toContain("group-a VS Code");
+      expect(vsCodeWindow.textContent).toContain("group-a");
+      expect(document.querySelector("[data-office-vscode-link='group-a']")).toBeTruthy();
+      expect(nativeApiOpenInEditor).toHaveBeenCalledTimes(1);
+      expect(nativeApiOpenInEditor).toHaveBeenLastCalledWith("/repo/alpha", "vscode");
+
+      await clickSelector("[data-office-server-rack='group-a']");
+      expect(document.querySelectorAll("[data-office-vscode-window='group-a']")).toHaveLength(1);
+      expect(nativeApiOpenInEditor).toHaveBeenCalledTimes(1);
+
+      const reopenButton = [...getVsCodeWindow("group-a").querySelectorAll<HTMLButtonElement>("button")].find(
+        (entry) => entry.textContent?.trim() === "Open in VS Code again",
+      );
+      if (!reopenButton) {
+        throw new Error("Missing VS Code reopen button");
+      }
+      reopenButton.click();
+      await waitForOfficeLayout();
+
+      expect(nativeApiOpenInEditor).toHaveBeenCalledTimes(2);
+      expect(nativeApiOpenInEditor).toHaveBeenLastCalledWith("/repo/alpha", "vscode");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("reuses the VS Code window rect after closing and reopening from the same rack", async () => {
+    window.desktopBridge = {} as never;
+
+    const mounted = await mountOffice();
+    try {
+      await clickSelector("[data-office-server-rack='group-a']");
+      await dragVsCodeWindow("group-a", { x: 140, y: 70 });
+      const movedLeft = getVsCodeWindow("group-a").parentElement?.style.left;
+      const movedTop = getVsCodeWindow("group-a").parentElement?.style.top;
+
+      const closeButton = getVsCodeWindow("group-a").querySelector<HTMLButtonElement>(
+        "button[aria-label='Close VS Code office window']",
+      );
+      if (!closeButton) {
+        throw new Error("Missing VS Code close button");
+      }
+      closeButton.click();
+      await waitForOfficeLayout();
+
+      await clickSelector("[data-office-server-rack='group-a']");
+      expect(getVsCodeWindow("group-a").parentElement?.style.left).toBe(movedLeft);
+      expect(getVsCodeWindow("group-a").parentElement?.style.top).toBe(movedTop);
+      expect(nativeApiOpenInEditor).toHaveBeenCalledTimes(2);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("tracks one VS Code office window per workspace group", async () => {
+    window.desktopBridge = {} as never;
+
+    const mounted = await mountOffice();
+    try {
+      await clickSelector("[data-office-server-rack='group-a']");
+      await clickSelector("[data-office-server-rack='group-b']");
+
+      expect(document.querySelectorAll("[data-office-vscode-window='group-a']")).toHaveLength(1);
+      expect(document.querySelectorAll("[data-office-vscode-window='group-b']")).toHaveLength(1);
+      expect(nativeApiOpenInEditor).toHaveBeenNthCalledWith(1, "/repo/alpha", "vscode");
+      expect(nativeApiOpenInEditor).toHaveBeenNthCalledWith(2, "/repo/beta", "vscode");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows a desktop-only message for the rack in browser mode without launching VS Code", async () => {
+    const mounted = await mountOffice();
+    try {
+      await clickSelector("[data-office-server-rack='group-a']");
+
+      const vsCodeWindow = getVsCodeWindow("group-a");
+      expect(vsCodeWindow.textContent).toContain("VS Code unavailable here");
+      expect(vsCodeWindow.textContent).toContain("desktop app");
+      expect(nativeApiOpenInEditor).not.toHaveBeenCalled();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows a missing-path message when a rack office has no workspace path", async () => {
+    useStore.setState({
+      projects: [makeProject("project-1", "alpha")],
+      threads: [
+        makeThread({
+          id: "thread-missing",
+          projectId: "missing-project",
+          title: "Missing path",
+          worktreePath: null,
+        }),
+      ],
+    });
+    window.desktopBridge = {} as never;
+
+    const mounted = await mountOffice();
+    try {
+      await clickSelector("[data-office-server-rack='project:missing-project']");
+
+      const vsCodeWindow = getVsCodeWindow("project:missing-project");
+      expect(vsCodeWindow.textContent).toContain("No workspace path available");
+      expect(vsCodeWindow.textContent).toContain("nothing to open in VS Code yet");
+      expect(nativeApiOpenInEditor).not.toHaveBeenCalled();
     } finally {
       await mounted.cleanup();
     }

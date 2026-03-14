@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BotIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   CircleCheckIcon,
   CoffeeIcon,
   FolderIcon,
-  MonitorIcon,
   MoreHorizontalIcon,
   PlusIcon,
   RotateCcwIcon,
   ScanSearchIcon,
+  Trash2Icon,
   TriangleAlertIcon,
   XIcon,
 } from "lucide-react";
@@ -18,9 +20,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "./ui/button";
 import OfficeAgentCreateDialog from "./OfficeAgentCreateDialog";
 import OfficeAdminWindow from "./OfficeAdminWindow";
-import OfficeBrowserWindow from "./OfficeBrowserWindow";
 import OfficeThreadWindow, {
-  buildDefaultOfficeBrowserWindowRect,
+  OfficeThreadWindowPreview,
   getOfficeAdminWindowDefaultSize,
   buildDefaultOfficeThreadWindowRect,
   normalizeOfficeThreadWindowRect,
@@ -44,7 +45,6 @@ import {
 } from "../lib/threadLifecycle";
 import { mergeThreadsWithDrafts } from "../lib/threadDrafts";
 import { readNativeApi } from "../nativeApi";
-import { usePreviewStore } from "../previewStore";
 import { deriveWorkLogEntries, isLatestTurnSettled } from "../session-logic";
 import { useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
@@ -63,7 +63,13 @@ import {
   OFFICE_DRAG_THRESHOLD_PX,
   createDefaultOfficePersistedState,
 } from "../office/officeDefaults";
-import { fitCameraToBounds, screenToWorld, zoomAtPoint } from "../office/officeCamera";
+import {
+  fitCameraToBounds,
+  screenToWorld,
+  worldRectToScreenRect,
+  worldToScreen,
+  zoomAtPoint,
+} from "../office/officeCamera";
 import { OFFICE_GROUP_ACCENT_OPTIONS, getDefaultOfficeGroupAccent } from "../office/officeColors";
 import {
   createOfficeFurniture,
@@ -79,7 +85,6 @@ import {
   readOfficePersistedState,
   writeOfficePersistedState,
 } from "../office/officePersistence";
-import { groupPreviewsByOffice } from "../office/officePreviewRouting";
 import type {
   OfficeCameraState,
   OfficeElement,
@@ -91,16 +96,18 @@ import type {
 
 const THOUGHT_EMOJIS = ["\u2615", "\ud83d\udca4", "\ud83d\udca1", "\ud83c\udf3f", "\ud83c\udfb5", "\ud83d\ude80", "\ud83d\udcda", "\u2728"];
 const ADMIN_WINDOW_ACCENT = "#f59e0b";
-const OFFICE_MINIMAP_WIDTH = 224;
-const OFFICE_MINIMAP_HEIGHT = 156;
+const ADMIN_WINDOW_SCREEN_ZOOM = 1;
+const OFFICE_MINIMAP_WIDTH = 320;
+const OFFICE_MINIMAP_HEIGHT = 220;
 const OFFICE_MINIMAP_PADDING = 14;
+const OFFICE_MINIMAP_HEADER_HEIGHT = 30;
 const OFFICE_VIEWPORT_POINTER_BLOCK_SELECTOR = [
   "[data-office-thread-window]",
   "[data-office-browser-window]",
+  "[data-office-vscode-window]",
   "[data-office-admin-window]",
   "[data-office-toolbar]",
   "[data-office-minimap]",
-  "[data-office-group]",
   "[data-office-group-color-trigger]",
   "[data-office-group-color-option]",
   "[data-office-group-resize]",
@@ -115,6 +122,7 @@ const OFFICE_VIEWPORT_POINTER_BLOCK_SELECTOR = [
 const OFFICE_VIEWPORT_CONTEXT_MENU_BLOCK_SELECTOR = [
   "[data-office-thread-window]",
   "[data-office-browser-window]",
+  "[data-office-vscode-window]",
   "[data-office-admin-window]",
   "[data-office-toolbar]",
   "[data-office-minimap]",
@@ -131,6 +139,11 @@ const OFFICE_VIEWPORT_CONTEXT_MENU_BLOCK_SELECTOR = [
 ].join(", ");
 const OFFICE_NOTIFICATION_LIMIT = 4;
 const OFFICE_NOTIFICATION_DURATION_MS = 6_500;
+const OFFICE_FAR_LABEL_ZOOM_THRESHOLD = 0.82;
+const OFFICE_WINDOW_AUTO_MINIMIZE_ZOOM_THRESHOLD = 0.72;
+const OFFICE_WINDOW_AUTO_RESTORE_ZOOM_THRESHOLD = 0.88;
+const OFFICE_THREAD_PREVIEW_WIDTH = 280;
+const OFFICE_THREAD_PREVIEW_HEIGHT = 124;
 
 const OFFICE_FURNITURE_LABELS: Record<OfficeFurnitureAddKind, string> = {
   conferenceSet: "Boardroom set",
@@ -139,7 +152,6 @@ const OFFICE_FURNITURE_LABELS: Record<OfficeFurnitureAddKind, string> = {
   chair: "Chair",
   plant: "Plant",
   coffeeBar: "Coffee machine",
-  tv: "TV",
 };
 
 interface BotState {
@@ -168,11 +180,11 @@ type DragState =
   | {
       pointerId: number;
       kind: "group";
-      key: string;
-      linkedThreadIds: string[];
+      groupKeys: string[];
+      linkedThreadIdsByGroupKey: Record<string, string[]>;
       startPointer: OfficePoint;
-      startValue: OfficePoint;
-      lastValue: OfficePoint;
+      startAnchorsByGroupKey: Record<string, OfficePoint>;
+      lastDelta: OfficePoint;
       moved: boolean;
     }
   | {
@@ -206,16 +218,20 @@ type DragState =
 interface OpenOfficeThreadWindow {
   threadId: ThreadId;
   rect: OfficeThreadWindowRect;
-}
-
-interface OpenOfficeBrowserWindow {
-  groupKey: string;
-  rect: OfficeThreadWindowRect;
-  selectedPreviewId: string | null;
-  showChooser: boolean;
+  minimized?: boolean;
 }
 
 type OfficeNotificationKind = "success" | "attention";
+
+type OfficeScreenRect = OfficePoint & OfficeSize;
+type OfficeSceneGroup = ReturnType<typeof buildOfficeScene>["groups"][number];
+
+interface GroupSelectionState {
+  pointerId: number;
+  startScreen: OfficePoint;
+  currentScreen: OfficePoint;
+  moved: boolean;
+}
 
 interface OfficeNotification {
   id: string;
@@ -303,6 +319,24 @@ function rectToBounds(rect: OfficePoint & OfficeSize): OfficeSceneBounds {
     maxX: rect.x + rect.width,
     maxY: rect.y + rect.height,
   };
+}
+
+function rectFromPoints(start: OfficePoint, end: OfficePoint): OfficeScreenRect {
+  return {
+    x: Math.min(start.x, end.x),
+    y: Math.min(start.y, end.y),
+    width: Math.abs(end.x - start.x),
+    height: Math.abs(end.y - start.y),
+  };
+}
+
+function rectsIntersect(left: OfficeScreenRect, right: OfficeScreenRect): boolean {
+  return (
+    left.x <= right.x + right.width &&
+    left.x + left.width >= right.x &&
+    left.y <= right.y + right.height &&
+    left.y + left.height >= right.y
+  );
 }
 
 function unionOfficeBounds(boundsList: OfficeSceneBounds[]): OfficeSceneBounds {
@@ -468,6 +502,210 @@ function ProjectOfficeIcon({ cwd }: { cwd: string | null }) {
   );
 }
 
+function OfficeGroupMenu(props: {
+  group: OfficeSceneGroup;
+  groupAccentColorsByKey: OfficePersistedState["groupAccentColorsByKey"];
+  mergedThreads: Thread[];
+  isFarMenu?: boolean;
+  scale?: number;
+  onCreate: (group: OfficeSceneGroup) => void;
+  onToggleCollapsed: (groupKey: string) => void;
+  onDelete: (groupKey: string) => void;
+  onSetAccentColor: (groupKey: string, accentColor: string | null) => void;
+}) {
+  const {
+    group,
+    groupAccentColorsByKey,
+    mergedThreads,
+    isFarMenu = false,
+    scale = 1,
+    onCreate,
+    onToggleCollapsed,
+    onDelete,
+    onSetAccentColor,
+  } = props;
+
+  const containerClassName = isFarMenu
+    ? "absolute z-10 flex min-w-max -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full border bg-background/96 px-3 py-2 text-xs font-semibold tracking-[0.12em] text-foreground/80 uppercase shadow-[0_18px_40px_-18px_rgba(15,23,42,0.9)] backdrop-blur-md"
+    : `absolute flex items-center gap-1.5 border bg-background/95 px-3 py-1 text-[10px] font-semibold tracking-[0.12em] text-foreground/75 uppercase shadow-sm ${
+        group.isCollapsed
+          ? "inset-x-2 top-2 rounded-xl"
+          : "left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 rounded-full"
+      }`;
+  const actionButtonClassName = isFarMenu
+    ? "inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium normal-case"
+    : "inline-flex h-5 items-center gap-1 rounded-full border px-1.5 text-[10px] font-medium normal-case";
+  const colorTriggerClassName = isFarMenu
+    ? "inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 shadow-sm transition-transform hover:scale-105"
+    : "inline-flex h-5 items-center gap-1 rounded-full border px-1.5 shadow-sm transition-transform hover:scale-105";
+  const iconClassName = isFarMenu ? "size-4" : "size-3";
+  const colorDotClassName = isFarMenu
+    ? "inline-flex size-3 rounded-full border border-black/10"
+    : "inline-flex size-2.5 rounded-full border border-black/10";
+
+  return (
+    <div
+      data-office-group-menu={group.key}
+      data-office-far-menu={isFarMenu ? group.key : undefined}
+      className={containerClassName}
+      style={{
+        borderColor: `${group.accentColor}88`,
+        boxShadow: isFarMenu
+          ? `0 0 0 1px ${group.accentColor}34, 0 18px 40px -18px rgba(15,23,42,0.9)`
+          : `0 10px 30px -20px ${group.accentColor}`,
+        background: isFarMenu
+          ? `linear-gradient(180deg, ${group.accentColor}2a, rgba(15,23,42,0.88))`
+          : undefined,
+        transform: isFarMenu ? `translate(-50%, -50%) scale(${scale})` : undefined,
+        transformOrigin: "center",
+      }}
+      onPointerDown={(event) => {
+        event.stopPropagation();
+      }}
+      onClick={(event) => {
+        event.stopPropagation();
+      }}
+      onContextMenu={(event) => {
+        event.stopPropagation();
+      }}
+    >
+      <ProjectOfficeIcon cwd={group.cwd} />
+      <span className="min-w-0 flex-1 truncate">{group.label}</span>
+      <div>
+        <Menu>
+          <MenuTrigger
+            render={
+              <button
+                type="button"
+                className={colorTriggerClassName}
+                style={{
+                  borderColor: `${group.accentColor}88`,
+                  backgroundColor: `${group.accentColor}24`,
+                  boxShadow: `0 0 0 1px ${group.accentColor}22`,
+                }}
+                aria-label={`Change color for ${group.label}`}
+                data-office-group-color-trigger={group.key}
+              />
+            }
+          >
+            <span className={colorDotClassName} style={{ backgroundColor: group.accentColor }} />
+            <span className={isFarMenu ? "text-xs font-medium normal-case" : "text-[10px] font-medium normal-case"}>
+              Color
+            </span>
+          </MenuTrigger>
+          <MenuPopup align="end" sideOffset={8}>
+            <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Group color</div>
+            <MenuItem
+              data-office-group-color-option={`${group.key}:auto`}
+              onClick={() => {
+                onSetAccentColor(group.key, null);
+              }}
+            >
+              <div className="flex w-full items-center gap-2">
+                <span
+                  className="inline-flex size-3 rounded-full border border-border/70 bg-linear-to-r from-transparent via-foreground/45 to-transparent"
+                  style={{
+                    boxShadow: `0 0 0 1px ${getDefaultOfficeGroupAccent(group.key)}24`,
+                  }}
+                />
+                <span>Auto</span>
+                <span className="ml-auto text-[10px] text-muted-foreground">
+                  {groupAccentColorsByKey[group.key] ? "" : "Selected"}
+                </span>
+              </div>
+            </MenuItem>
+            <MenuSeparator />
+            {OFFICE_GROUP_ACCENT_OPTIONS.map((option) => (
+              <MenuItem
+                key={option.accentColor}
+                data-office-group-color-option={`${group.key}:${option.accentColor}`}
+                onClick={() => {
+                  onSetAccentColor(group.key, option.accentColor);
+                }}
+              >
+                <div className="flex w-full items-center gap-2">
+                  <span
+                    className="inline-flex size-3 rounded-full border border-black/10"
+                    style={{ backgroundColor: option.accentColor }}
+                  />
+                  <span>{option.label}</span>
+                  <span className="ml-auto text-[10px] text-muted-foreground">
+                    {groupAccentColorsByKey[group.key] === option.accentColor ? "Selected" : ""}
+                  </span>
+                </div>
+              </MenuItem>
+            ))}
+          </MenuPopup>
+        </Menu>
+      </div>
+      <button
+        type="button"
+        className={actionButtonClassName}
+        style={{
+          borderColor: `${group.accentColor}88`,
+          color: group.accentColor,
+          backgroundColor: `${group.accentColor}14`,
+        }}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onCreate(group);
+        }}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+        }}
+        aria-label={`Create agent in ${group.label}`}
+      >
+        <PlusIcon className={iconClassName} />
+        Create
+      </button>
+      <button
+        type="button"
+        className={actionButtonClassName}
+        style={{
+          borderColor: `${group.accentColor}88`,
+          color: group.accentColor,
+          backgroundColor: `${group.accentColor}14`,
+        }}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onToggleCollapsed(group.key);
+        }}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+        }}
+        aria-label={`${group.isCollapsed ? "Expand" : "Collapse"} ${group.label}`}
+        data-office-group-collapse={group.key}
+      >
+        {group.isCollapsed ? <ChevronRightIcon className={iconClassName} /> : <ChevronDownIcon className={iconClassName} />}
+        {group.isCollapsed ? "Expand" : "Collapse"}
+      </button>
+      <button
+        type="button"
+        className={`${actionButtonClassName} text-red-200`}
+        style={{
+          borderColor: "rgba(248,113,113,0.55)",
+          backgroundColor: "rgba(127,29,29,0.22)",
+        }}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onDelete(group.key);
+        }}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+        }}
+        aria-label={`Delete ${group.label}`}
+        data-office-group-delete={group.key}
+      >
+        <Trash2Icon className={iconClassName} />
+        Delete
+      </button>
+    </div>
+  );
+}
+
 function FurnitureNode(props: {
   element: OfficeElement;
   isSelected: boolean;
@@ -481,10 +719,6 @@ function FurnitureNode(props: {
   const selectedClassName = props.isSelected
     ? "ring-2 ring-primary/70 ring-offset-2 ring-offset-background"
     : "";
-  const tvGroupKey =
-    element.type === "tv" && typeof element.metadata?.groupKey === "string"
-      ? element.metadata.groupKey
-      : undefined;
 
   if (element.type === "waterCooler") {
     return (
@@ -569,53 +803,6 @@ function FurnitureNode(props: {
     );
   }
 
-  if (element.type === "tv") {
-    return (
-      <div
-        data-office-element={element.id}
-        data-office-element-selected={props.isSelected ? "true" : undefined}
-        data-office-tv={tvGroupKey}
-        className={`absolute flex cursor-grab flex-col items-center active:cursor-grabbing ${selectedClassName}`}
-        style={{ left: element.x, top: element.y, width: element.width, height: element.height }}
-        onPointerDown={props.onPointerDown}
-        onPointerMove={props.onPointerMove}
-        onPointerUp={props.onPointerUp}
-        onPointerCancel={props.onPointerCancel}
-        onClick={props.onClick}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(event) => {
-          if ((event.key === "Enter" || event.key === " ") && props.onClick) {
-            event.preventDefault();
-            props.onClick();
-          }
-        }}
-        aria-label="Open office preview TV"
-      >
-        <div className="relative flex h-full w-full flex-col items-center">
-          <div className="relative flex h-[72px] w-full items-center justify-center rounded-[18px] border border-slate-700 bg-slate-950 shadow-[0_10px_30px_-16px_rgba(15,23,42,0.85)]">
-            <div
-              className="absolute inset-[7px] rounded-[12px] border border-slate-800"
-              style={{
-                background:
-                  "linear-gradient(135deg, rgba(34,197,94,0.16), rgba(59,130,246,0.22) 52%, rgba(15,23,42,0.88))",
-              }}
-            />
-            <div className="absolute left-3 top-3 rounded-full border border-emerald-400/30 bg-emerald-400/12 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-emerald-200">
-              Live Preview
-            </div>
-            <div className="absolute bottom-3 right-3 flex items-center gap-1 rounded-full bg-slate-950/70 px-2 py-0.5 text-[9px] font-medium text-slate-200">
-              <MonitorIcon className="size-3" />
-              TV
-            </div>
-          </div>
-          <div className="h-5 w-3 rounded-b-full bg-slate-800/90" />
-          <div className="-mt-1 h-2 w-12 rounded-full bg-slate-700/70" />
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div
       data-office-element={element.id}
@@ -660,12 +847,10 @@ export default function VirtualOffice({
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearThreadDraft);
   const clearProjectDraftThreadById = useComposerDraftStore((store) => store.clearProjectDraftThreadById);
   const clearTerminalState = useTerminalStateStore((store) => store.clearTerminalState);
-  const previewSnapshot = usePreviewStore((store) => store.snapshot);
   const queryClient = useQueryClient();
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const viewportRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<OfficePersistedState | null>(null);
-  const browserWindowRectCacheRef = useRef<Record<string, OfficeThreadWindowRect>>({});
   const persistTimerRef = useRef<number | null>(null);
   const previousViewportSizeRef = useRef({ width: 0, height: 0 });
   const officeNotificationIdRef = useRef(0);
@@ -675,7 +860,9 @@ export default function VirtualOffice({
   const previousSettledTurnIdByThreadIdRef = useRef(new Map<string, string | null>());
   const notificationsInitializedRef = useRef(false);
   const suppressClickUntilRef = useRef(0);
+  const suppressContextMenuUntilRef = useRef(0);
   const panStateRef = useRef<PanState | null>(null);
+  const groupSelectionStateRef = useRef<GroupSelectionState | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
   const [initialPersistedState] = useState<OfficePersistedState | null>(() => readOfficePersistedState());
   const [officeState, setOfficeState] = useState<OfficePersistedState>(
@@ -685,13 +872,15 @@ export default function VirtualOffice({
   const [hoveredBotId, setHoveredBotId] = useState<string | null>(null);
   const [isInteracting, setIsInteracting] = useState(false);
   const [openWindows, setOpenWindows] = useState<OpenOfficeThreadWindow[]>([]);
-  const [openBrowserWindows, setOpenBrowserWindows] = useState<OpenOfficeBrowserWindow[]>([]);
   const [adminWindowRect, setAdminWindowRect] = useState<OfficeThreadWindowRect | null>(null);
   const [windowStackOrder, setWindowStackOrder] = useState<string[]>([]);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [createDialogProjectId, setCreateDialogProjectId] = useState<ProjectId | null>(null);
   const [selectedFurnitureId, setSelectedFurnitureId] = useState<string | null>(null);
+  const [selectedGroupKeys, setSelectedGroupKeys] = useState<string[]>([]);
+  const [groupSelectionRect, setGroupSelectionRect] = useState<OfficeScreenRect | null>(null);
   const [officeNotifications, setOfficeNotifications] = useState<OfficeNotification[]>([]);
+  const [officeWindowsMinimizedForZoom, setOfficeWindowsMinimizedForZoom] = useState(false);
   const shouldFitCameraRef = useRef(initialPersistedState === null);
   const camera = officeState.camera;
 
@@ -836,26 +1025,7 @@ export default function VirtualOffice({
     () => scene.furniture.find((element) => element.id === selectedFurnitureId) ?? null,
     [scene.furniture, selectedFurnitureId],
   );
-  const previewsByGroupKey = useMemo(
-    () =>
-      groupPreviewsByOffice({
-        threads: mergedThreads,
-        projects,
-        previews: previewSnapshot.previews,
-      }),
-    [mergedThreads, previewSnapshot.previews, projects],
-  );
-  const tvByGroupKey = useMemo(
-    () =>
-      new Map(
-        scene.furniture.flatMap((element) =>
-          element.type === "tv" && typeof element.metadata?.groupKey === "string"
-            ? [[element.metadata.groupKey, element] as const]
-            : [],
-        ),
-      ),
-    [scene.furniture],
-  );
+  const selectedGroupKeySet = useMemo(() => new Set(selectedGroupKeys), [selectedGroupKeys]);
   const windowZIndices = useMemo(
     () =>
       new Map(
@@ -872,19 +1042,12 @@ export default function VirtualOffice({
   }, [mergedThreads]);
 
   useEffect(() => {
-    const validGroupKeys = new Set(scene.groups.map((group) => group.key));
-    setOpenBrowserWindows((current) =>
-      current.filter((windowState) => validGroupKeys.has(windowState.groupKey)),
-    );
-  }, [scene.groups]);
-
-  useEffect(() => {
     const validThreadTokens = new Set(mergedThreads.map((thread) => `thread:${thread.id}`));
-    const validBrowserTokens = new Set(scene.groups.map((group) => `browser:${group.key}`));
     setWindowStackOrder((current) =>
       current.filter(
         (token) =>
-          token === "admin:office-admin" || validThreadTokens.has(token) || validBrowserTokens.has(token),
+          token === "admin:office-admin" ||
+          validThreadTokens.has(token),
       ),
     );
   }, [mergedThreads, scene.groups]);
@@ -901,6 +1064,14 @@ export default function VirtualOffice({
       setSelectedFurnitureId(null);
     }
   }, [scene.furniture, selectedFurnitureId]);
+
+  useEffect(() => {
+    const validGroupKeys = new Set(scene.groups.map((group) => group.key));
+    setSelectedGroupKeys((current) => {
+      const next = current.filter((groupKey) => validGroupKeys.has(groupKey));
+      return next.length === current.length ? current : next;
+    });
+  }, [scene.groups]);
 
   useEffect(() => {
     setOpenBrowserWindows((current) => {
@@ -1011,6 +1182,18 @@ export default function VirtualOffice({
   }, []);
 
   useEffect(() => {
+    setOfficeWindowsMinimizedForZoom((current) => {
+      if (!current && camera.zoom <= OFFICE_WINDOW_AUTO_MINIMIZE_ZOOM_THRESHOLD) {
+        return true;
+      }
+      if (current && camera.zoom >= OFFICE_WINDOW_AUTO_RESTORE_ZOOM_THRESHOLD) {
+        return false;
+      }
+      return current;
+    });
+  }, [camera.zoom]);
+
+  useEffect(() => {
     const previousViewportSize = previousViewportSizeRef.current;
     if (viewportSize.width <= 0 || viewportSize.height <= 0) {
       return;
@@ -1115,6 +1298,230 @@ export default function VirtualOffice({
     () => new Map(scene.groups.map((group) => [group.key, group] as const)),
     [scene.groups],
   );
+  const centerCameraOnGroup = useCallback(
+    (groupKey: string) => {
+      if (viewportSize.width <= 0 || viewportSize.height <= 0) {
+        return;
+      }
+
+      const group = groupByKey.get(groupKey);
+      if (!group) {
+        return;
+      }
+
+      const centerX = group.element.x + group.element.width / 2;
+      const centerY = group.element.y + group.element.height / 2;
+      setOfficeState((current) => ({
+        ...current,
+        camera: {
+          zoom: current.camera.zoom,
+          x: viewportSize.width / 2 - centerX * current.camera.zoom,
+          y: viewportSize.height / 2 - centerY * current.camera.zoom,
+        },
+      }));
+    },
+    [groupByKey, viewportSize],
+  );
+  const toggleGroupCollapsed = useCallback((groupKey: string) => {
+    setOfficeState((current) => {
+      const expandedGroupKeys = new Set(current.expandedGroupKeys);
+      if (expandedGroupKeys.has(groupKey)) {
+        expandedGroupKeys.delete(groupKey);
+      } else {
+        expandedGroupKeys.add(groupKey);
+      }
+
+      return {
+        ...current,
+        expandedGroupKeys: [...expandedGroupKeys],
+      };
+    });
+  }, []);
+  const handleDeleteGroup = useCallback(
+    async (groupKey: string) => {
+      const group = groupByKey.get(groupKey);
+      if (!group) {
+        return;
+      }
+
+      const api = readNativeApi();
+      const confirmed = await api?.dialogs.confirm(
+        `Remove ${group.label} from the office view?\n\nThis only removes the office from the layout. Threads, worktrees, and project data stay intact. Use Reset layout to bring it back.`,
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      const threadIds = new Set(group.deskThreadIds.map((threadId) => String(threadId)));
+      setSelectedGroupKeys((current) => current.filter((key) => key !== groupKey));
+      setHoveredBotId((current) => (current && threadIds.has(current) ? null : current));
+      setOpenWindows((current) => current.filter((windowState) => !threadIds.has(String(windowState.threadId))));
+      setOpenBrowserWindows((current) => current.filter((windowState) => windowState.groupKey !== groupKey));
+      setOpenVsCodeWindows((current) => current.filter((windowState) => windowState.groupKey !== groupKey));
+      setWindowStackOrder((current) =>
+        current.filter((token) => {
+          if (token === `browser:${groupKey}` || token === `vscode:${groupKey}`) {
+            return false;
+          }
+          return !(token.startsWith("thread:") && threadIds.has(token.slice("thread:".length)));
+        }),
+      );
+      setOfficeState((current) => {
+        const nextProjectGroupAnchors = { ...current.projectGroupAnchors };
+        const nextProjectGroupSizesByKey = { ...current.projectGroupSizesByKey };
+        const nextDeskOffsetsByThreadId = { ...current.deskOffsetsByThreadId };
+        const nextGroupAccentColorsByKey = { ...current.groupAccentColorsByKey };
+        delete nextProjectGroupAnchors[groupKey];
+        delete nextProjectGroupSizesByKey[groupKey];
+        delete nextGroupAccentColorsByKey[groupKey];
+        for (const threadId of threadIds) {
+          delete nextDeskOffsetsByThreadId[threadId];
+        }
+
+        return {
+          ...current,
+          furniture: current.furniture.filter(
+            (element) => element.placement.kind !== "groupLinked" || element.placement.groupKey !== groupKey,
+          ),
+          projectGroupAnchors: nextProjectGroupAnchors,
+          projectGroupSizesByKey: nextProjectGroupSizesByKey,
+          deskOffsetsByThreadId: nextDeskOffsetsByThreadId,
+          groupAccentColorsByKey: nextGroupAccentColorsByKey,
+          expandedGroupKeys: current.expandedGroupKeys.filter((key) => key !== groupKey),
+          hiddenGroupKeys: [...new Set([...current.hiddenGroupKeys, groupKey])],
+          defaultFurnitureSeededGroupKeys: current.defaultFurnitureSeededGroupKeys.filter(
+            (entry) => entry !== groupKey && !entry.includes(`group:${groupKey}:`),
+          ),
+        };
+      });
+    },
+    [groupByKey],
+  );
+  const groupScreenRects = useMemo(
+    () =>
+      scene.groups.map((group) => {
+        const topLeft = worldToScreen(
+          {
+            x: group.element.x,
+            y: group.element.y,
+          },
+          camera,
+        );
+        return {
+          key: group.key,
+          rect: {
+            x: topLeft.x,
+            y: topLeft.y,
+            width: group.element.width * camera.zoom,
+            height: group.element.height * camera.zoom,
+          },
+        };
+      }),
+    [camera, scene.groups],
+  );
+  const farOfficeMenus = useMemo(
+    () =>
+      camera.zoom > OFFICE_FAR_LABEL_ZOOM_THRESHOLD
+        ? []
+        : scene.groups.map((group) => ({
+            key: group.key,
+            group,
+            anchor: worldToScreen(
+              {
+                x: group.element.x + group.element.width / 2,
+                y: group.element.y,
+              },
+              camera,
+            ),
+            scale: clamp(OFFICE_FAR_LABEL_ZOOM_THRESHOLD / Math.max(camera.zoom, 0.32), 1, 1.9),
+          })),
+    [camera, scene.groups],
+  );
+  const devicePixelRatio = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
+  const projectWindowRect = useCallback(
+    (rect: OfficeThreadWindowRect) =>
+      worldRectToScreenRect({
+        rect,
+        camera,
+        devicePixelRatio,
+      }),
+    [camera, devicePixelRatio],
+  );
+  const projectedThreadWindowRects = useMemo(
+    () =>
+      new Map(
+        openWindows
+          .filter((windowState) => windowState.minimized !== true)
+          .map((windowState) => [windowState.threadId, projectWindowRect(windowState.rect)] as const),
+      ),
+    [openWindows, projectWindowRect],
+  );
+  const minimizedThreadWindows = useMemo(
+    () => openWindows.filter((windowState) => windowState.minimized === true),
+    [openWindows],
+  );
+  const expandedThreadWindows = useMemo(
+    () => openWindows.filter((windowState) => windowState.minimized !== true),
+    [openWindows],
+  );
+  const projectedThreadPreviewRects = useMemo(
+    () =>
+      new Map(
+        openWindows.flatMap((windowState) => {
+          const desk = deskByThreadId.get(windowState.threadId);
+          if (!desk) {
+            return [];
+          }
+
+          const anchor = worldToScreen(
+            {
+              x: desk.element.x + DESK_WIDTH * 0.5,
+              y: desk.element.y - 18,
+            },
+            camera,
+          );
+
+          return [
+            [
+              windowState.threadId,
+              {
+                x: Math.round(anchor.x - OFFICE_THREAD_PREVIEW_WIDTH * 0.5),
+                y: Math.round(anchor.y - OFFICE_THREAD_PREVIEW_HEIGHT),
+                width: OFFICE_THREAD_PREVIEW_WIDTH,
+                height: OFFICE_THREAD_PREVIEW_HEIGHT,
+              },
+            ] as const,
+          ];
+        }),
+      ),
+    [camera, deskByThreadId, openWindows],
+  );
+  const projectedBrowserWindowRects = useMemo(
+    () =>
+      new Map(
+        openBrowserWindows.map((windowState) => [windowState.groupKey, projectWindowRect(windowState.rect)] as const),
+      ),
+    [openBrowserWindows, projectWindowRect],
+  );
+  const projectedVsCodeWindowRects = useMemo(
+    () =>
+      new Map(
+        openVsCodeWindows.map((windowState) => [windowState.groupKey, projectWindowRect(windowState.rect)] as const),
+      ),
+    [openVsCodeWindows, projectWindowRect],
+  );
+  const projectedAdminWindowRect = useMemo(
+    () =>
+      adminWindowRect
+        ? worldRectToScreenRect({
+            rect: adminWindowRect,
+            camera,
+            devicePixelRatio,
+            sizeZoom: ADMIN_WINDOW_SCREEN_ZOOM,
+          })
+        : null,
+    [adminWindowRect, camera, devicePixelRatio],
+  );
   const bots = useMemo(
     () =>
       officeInputs.desks
@@ -1202,6 +1609,16 @@ export default function VirtualOffice({
       setOpenWindows((current) => {
         const existing = current.find((entry) => entry.threadId === threadId);
         if (existing) {
+          if (existing.minimized === true) {
+            return current.map((entry) =>
+              entry.threadId === threadId
+                ? {
+                    ...entry,
+                    minimized: false,
+                  }
+                : entry,
+            );
+          }
           return current;
         }
         const desk = deskByThreadId.get(threadId);
@@ -1227,6 +1644,7 @@ export default function VirtualOffice({
           {
             threadId,
             rect: buildDefaultOfficeThreadWindowRect(anchor, current.length),
+            minimized: false,
           },
         ];
       });
@@ -1235,7 +1653,16 @@ export default function VirtualOffice({
   );
 
   const closeThreadWindow = useCallback((threadId: ThreadId) => {
-    setOpenWindows((current) => current.filter((entry) => entry.threadId !== threadId));
+    setOpenWindows((current) =>
+      current.map((entry) =>
+        entry.threadId === threadId
+          ? {
+              ...entry,
+              minimized: true,
+            }
+          : entry,
+      ),
+    );
     removeWindowToken(`thread:${threadId}`);
   }, [removeWindowToken]);
 
@@ -1299,129 +1726,9 @@ export default function VirtualOffice({
     setAdminWindowRect(normalizeOfficeThreadWindowRect(rect));
   }, []);
 
-  const openBrowserWindow = useCallback(
-    (groupKey: string) => {
-      moveWindowTokenToFront(`browser:${groupKey}`);
-      setOpenBrowserWindows((current) => {
-        const existing = current.find((entry) => entry.groupKey === groupKey);
-        if (existing) {
-          return current;
-        }
-
-        const group = groupByKey.get(groupKey);
-        const tv = tvByGroupKey.get(groupKey);
-        const fallbackAnchor =
-          viewportSize.width > 0 && viewportSize.height > 0
-            ? screenToWorld(
-                {
-                  x: viewportSize.width / 2,
-                  y: viewportSize.height / 2,
-                },
-                camera,
-              )
-            : { x: 0, y: 0 };
-        const anchor = tv
-          ? {
-              x: tv.x + tv.width,
-              y: tv.y + 18,
-            }
-          : group
-            ? {
-                x: group.element.x + group.element.width,
-                y: group.element.y + 32,
-              }
-            : fallbackAnchor;
-        const previews = previewsByGroupKey[groupKey] ?? [];
-        const livePreviews = previews.filter((preview) => preview.status === "live");
-
-        return [
-          ...current,
-          {
-            groupKey,
-            rect:
-              browserWindowRectCacheRef.current[groupKey] ??
-              buildDefaultOfficeBrowserWindowRect(
-                anchor,
-                current.length + openWindows.length + (adminWindowRect ? 1 : 0),
-              ),
-            selectedPreviewId: livePreviews.length === 1 ? livePreviews[0]!.id : null,
-            showChooser: livePreviews.length > 1,
-          },
-        ];
-      });
-    },
-    [
-      adminWindowRect,
-      camera,
-      groupByKey,
-      moveWindowTokenToFront,
-      openWindows.length,
-      previewsByGroupKey,
-      tvByGroupKey,
-      viewportSize.height,
-      viewportSize.width,
-    ],
-  );
-
-  const closeBrowserWindow = useCallback((groupKey: string) => {
-    setOpenBrowserWindows((current) => {
-      const existing = current.find((entry) => entry.groupKey === groupKey);
-      if (existing) {
-        browserWindowRectCacheRef.current[groupKey] = existing.rect;
-      }
-      return current.filter((entry) => entry.groupKey !== groupKey);
-    });
-    removeWindowToken(`browser:${groupKey}`);
-  }, [removeWindowToken]);
-
-  const focusBrowserWindow = useCallback((groupKey: string) => {
-    moveWindowTokenToFront(`browser:${groupKey}`);
-  }, [moveWindowTokenToFront]);
-
-  const updateBrowserWindowRect = useCallback((groupKey: string, rect: OfficeThreadWindowRect) => {
-    const nextRect = normalizeOfficeThreadWindowRect(rect);
-    browserWindowRectCacheRef.current[groupKey] = nextRect;
-    setOpenBrowserWindows((current) =>
-      current.map((entry) =>
-        entry.groupKey === groupKey
-          ? { ...entry, rect: nextRect }
-          : entry,
-      ),
-    );
-  }, []);
-
-  const selectBrowserPreview = useCallback((groupKey: string, previewId: string) => {
-    moveWindowTokenToFront(`browser:${groupKey}`);
-    setOpenBrowserWindows((current) =>
-      current.map((entry) =>
-        entry.groupKey === groupKey
-          ? {
-              ...entry,
-              selectedPreviewId: previewId,
-              showChooser: false,
-            }
-          : entry,
-      ),
-    );
-  }, [moveWindowTokenToFront]);
-
-  const showBrowserChooser = useCallback((groupKey: string) => {
-    moveWindowTokenToFront(`browser:${groupKey}`);
-    setOpenBrowserWindows((current) =>
-      current.map((entry) =>
-        entry.groupKey === groupKey
-          ? {
-              ...entry,
-              showChooser: true,
-            }
-          : entry,
-      ),
-    );
-  }, [moveWindowTokenToFront]);
-
   const openWindowConnections = useMemo(
     () =>
-      openWindows.flatMap((windowState) => {
+      expandedThreadWindows.flatMap((windowState) => {
         const desk = deskByThreadId.get(windowState.threadId);
         if (!desk) {
           return [];
@@ -1441,39 +1748,7 @@ export default function VirtualOffice({
           },
         ];
       }),
-    [deskByThreadId, openWindows],
-  );
-  const openBrowserWindowConnections = useMemo(
-    () =>
-      openBrowserWindows.flatMap((windowState) => {
-        const tv = tvByGroupKey.get(windowState.groupKey);
-        const group = groupByKey.get(windowState.groupKey);
-        const accentColor = group?.accentColor ?? "#94a3b8";
-        const sourcePointWorld = tv
-          ? {
-              x: tv.x + tv.width / 2,
-              y: tv.y + tv.height / 2,
-            }
-          : group
-            ? {
-                x: group.element.x + group.element.width,
-                y: group.element.y + 44,
-              }
-            : null;
-        if (!sourcePointWorld) {
-          return [];
-        }
-
-        return [
-          {
-            groupKey: windowState.groupKey,
-            accentColor,
-            tvPoint: sourcePointWorld,
-            windowPoint: closestPointOnRect(sourcePointWorld, windowState.rect),
-          },
-        ];
-      }),
-    [groupByKey, openBrowserWindows, tvByGroupKey],
+    [deskByThreadId, expandedThreadWindows],
   );
   const minimapState = useMemo(() => {
     const viewportTopLeft =
@@ -1498,8 +1773,7 @@ export default function VirtualOffice({
     };
     const worldBounds = unionOfficeBounds([
       scene.bounds,
-      ...openWindows.map((windowState) => rectToBounds(windowState.rect)),
-      ...openBrowserWindows.map((windowState) => rectToBounds(windowState.rect)),
+      ...expandedThreadWindows.map((windowState) => rectToBounds(windowState.rect)),
       ...(adminWindowRect ? [rectToBounds(adminWindowRect)] : []),
     ]);
     const paddedWorldBounds = {
@@ -1510,14 +1784,17 @@ export default function VirtualOffice({
     };
     const worldWidth = Math.max(paddedWorldBounds.maxX - paddedWorldBounds.minX, 1);
     const worldHeight = Math.max(paddedWorldBounds.maxY - paddedWorldBounds.minY, 1);
-    const scale = Math.min(
-      (OFFICE_MINIMAP_WIDTH - OFFICE_MINIMAP_PADDING * 2) / worldWidth,
-      (OFFICE_MINIMAP_HEIGHT - OFFICE_MINIMAP_PADDING * 2) / worldHeight,
-    );
+    const minimapInnerWidth = OFFICE_MINIMAP_WIDTH - OFFICE_MINIMAP_PADDING * 2;
+    const minimapInnerHeight =
+      OFFICE_MINIMAP_HEIGHT - OFFICE_MINIMAP_HEADER_HEIGHT - OFFICE_MINIMAP_PADDING * 2;
+    const scale = Math.min(minimapInnerWidth / worldWidth, minimapInnerHeight / worldHeight);
     const contentWidth = worldWidth * scale;
     const contentHeight = worldHeight * scale;
     const offsetX = (OFFICE_MINIMAP_WIDTH - contentWidth) / 2;
-    const offsetY = (OFFICE_MINIMAP_HEIGHT - contentHeight) / 2;
+    const offsetY =
+      OFFICE_MINIMAP_HEADER_HEIGHT +
+      OFFICE_MINIMAP_PADDING +
+      (minimapInnerHeight - contentHeight) / 2;
     const mapRect = (rect: OfficePoint & OfficeSize) => ({
       x: offsetX + (rect.x - paddedWorldBounds.minX) * scale,
       y: offsetY + (rect.y - paddedWorldBounds.minY) * scale,
@@ -1551,7 +1828,7 @@ export default function VirtualOffice({
           y: desk.element.y + DESK_HEIGHT / 2,
         }),
       })),
-      windowRects: openWindows.map((windowState) => {
+      windowRects: expandedThreadWindows.map((windowState) => {
         const desk = deskByThreadId.get(windowState.threadId);
         return {
           id: `thread:${windowState.threadId}`,
@@ -1567,6 +1844,14 @@ export default function VirtualOffice({
           rect: mapRect(windowState.rect),
         };
       }),
+      vsCodeWindowRects: openVsCodeWindows.map((windowState) => {
+        const group = groupByKey.get(windowState.groupKey);
+        return {
+          id: `vscode:${windowState.groupKey}`,
+          accentColor: group?.accentColor ?? "#94a3b8",
+          rect: mapRect(windowState.rect),
+        };
+      }),
       adminWindowRect: adminWindowRect ? mapRect(adminWindowRect) : null,
     };
   }, [
@@ -1575,13 +1860,39 @@ export default function VirtualOffice({
     deskByThreadId,
     groupByKey,
     openBrowserWindows,
-    openWindows,
+    openVsCodeWindows,
+    expandedThreadWindows,
     scene.bounds,
     scene.desks,
     scene.groups,
     viewportSize.height,
     viewportSize.width,
   ]);
+  const centeredGroupKey = useMemo(() => {
+    if (viewportSize.width <= 0 || viewportSize.height <= 0) {
+      return null;
+    }
+
+    const viewportCenter = screenToWorld(
+      {
+        x: viewportSize.width / 2,
+        y: viewportSize.height / 2,
+      },
+      camera,
+    );
+
+    const centeredGroup = scene.groups.find((group) => {
+      const { x, y, width, height } = group.element;
+      return (
+        viewportCenter.x >= x &&
+        viewportCenter.x <= x + width &&
+        viewportCenter.y >= y &&
+        viewportCenter.y <= y + height
+      );
+    });
+
+    return centeredGroup?.key ?? null;
+  }, [camera, scene.groups, viewportSize.height, viewportSize.width]);
   const handleMinimapPointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       if (event.button !== 0 || viewportSize.width <= 0 || viewportSize.height <= 0) {
@@ -1823,6 +2134,16 @@ export default function VirtualOffice({
     [openBrowserWindow, shouldSuppressClick],
   );
 
+  const handleServerRackClick = useCallback(
+    (groupKey: string) => {
+      if (shouldSuppressClick()) {
+        return;
+      }
+      openVsCodeWindow(groupKey);
+    },
+    [openVsCodeWindow, shouldSuppressClick],
+  );
+
   const openCreateDialog = useCallback((projectId: ProjectId | null = null) => {
     setCreateDialogProjectId(projectId ?? projects[0]?.id ?? null);
     setIsCreateDialogOpen(true);
@@ -1906,17 +2227,18 @@ export default function VirtualOffice({
         threadId,
       );
       if (result.deletedDraftOnly || openWindows.some((entry) => entry.threadId === threadId)) {
-        closeThreadWindow(threadId);
+        setOpenWindows((current) => current.filter((entry) => entry.threadId !== threadId));
+        removeWindowToken(`thread:${threadId}`);
       }
     },
     [
       clearComposerDraftForThread,
       clearProjectDraftThreadById,
       clearTerminalState,
-      closeThreadWindow,
       getDraftThread,
       openWindows,
       projects,
+      removeWindowToken,
       removeWorktreeMutation,
       settings.confirmThreadDelete,
       threads,
@@ -1966,6 +2288,7 @@ export default function VirtualOffice({
         ...currentState,
         furniture: [...currentState.furniture, ...addedFurniture],
       });
+      setSelectedGroupKeys([]);
       setSelectedFurnitureId(addedFurniture[0]?.id ?? null);
     },
     [getViewportCenterWorldPoint, officeState],
@@ -2015,6 +2338,9 @@ export default function VirtualOffice({
       trySetPointerCapture(event.currentTarget, event.pointerId);
       dragStateRef.current = nextDragState;
       setSelectedFurnitureId(nextDragState.kind === "element" ? nextDragState.key : null);
+      if (nextDragState.kind !== "group" && nextDragState.kind !== "groupResize") {
+        setSelectedGroupKeys([]);
+      }
       setIsInteracting(true);
       setHoveredBotId(null);
       document.body.style.cursor = "grabbing";
@@ -2026,6 +2352,8 @@ export default function VirtualOffice({
   const endInteraction = useCallback(() => {
     dragStateRef.current = null;
     panStateRef.current = null;
+    groupSelectionStateRef.current = null;
+    setGroupSelectionRect(null);
     setIsInteracting(false);
     document.body.style.removeProperty("cursor");
     document.body.style.removeProperty("user-select");
@@ -2038,7 +2366,25 @@ export default function VirtualOffice({
         return;
       }
       if (event.button === 0) {
-        setSelectedFurnitureId(null);
+        event.preventDefault();
+        const viewportRect = event.currentTarget.getBoundingClientRect();
+        trySetPointerCapture(event.currentTarget, event.pointerId);
+        groupSelectionStateRef.current = {
+          pointerId: event.pointerId,
+          startScreen: {
+            x: event.clientX - viewportRect.left,
+            y: event.clientY - viewportRect.top,
+          },
+          currentScreen: {
+            x: event.clientX - viewportRect.left,
+            y: event.clientY - viewportRect.top,
+          },
+          moved: false,
+        };
+        setIsInteracting(true);
+        setHoveredBotId(null);
+        document.body.style.cursor = "crosshair";
+        document.body.style.userSelect = "none";
         return;
       }
       if (event.button !== 1) {
@@ -2065,6 +2411,10 @@ export default function VirtualOffice({
 
   const handleViewportContextMenu = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
+      if (performance.now() < suppressContextMenuUntilRef.current) {
+        event.preventDefault();
+        return;
+      }
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest(OFFICE_VIEWPORT_CONTEXT_MENU_BLOCK_SELECTOR)) {
         return;
@@ -2079,12 +2429,46 @@ export default function VirtualOffice({
         camera,
       );
       setSelectedFurnitureId(null);
+      setSelectedGroupKeys([]);
       openAdminWindowAtPoint(worldPoint);
     },
     [camera, openAdminWindowAtPoint],
   );
 
   const handleViewportPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const groupSelectionState = groupSelectionStateRef.current;
+    if (groupSelectionState && groupSelectionState.pointerId === event.pointerId) {
+      event.preventDefault();
+      const viewportRect = event.currentTarget.getBoundingClientRect();
+      const nextCurrentScreen = {
+        x: event.clientX - viewportRect.left,
+        y: event.clientY - viewportRect.top,
+      };
+      groupSelectionState.currentScreen = nextCurrentScreen;
+      const nextSelectionRect = rectFromPoints(
+        groupSelectionState.startScreen,
+        groupSelectionState.currentScreen,
+      );
+      if (
+        !groupSelectionState.moved &&
+        Math.hypot(
+          nextCurrentScreen.x - groupSelectionState.startScreen.x,
+          nextCurrentScreen.y - groupSelectionState.startScreen.y,
+        ) >= OFFICE_DRAG_THRESHOLD_PX
+      ) {
+        groupSelectionState.moved = true;
+      }
+      if (groupSelectionState.moved) {
+        setGroupSelectionRect(nextSelectionRect);
+        setSelectedGroupKeys(
+          groupScreenRects
+            .filter((group) => rectsIntersect(group.rect, nextSelectionRect))
+            .map((group) => group.key),
+        );
+      }
+      return;
+    }
+
     const panState = panStateRef.current;
     if (!panState || panState.pointerId !== event.pointerId) {
       return;
@@ -2105,10 +2489,24 @@ export default function VirtualOffice({
         y: panState.startCamera.y + dy,
       },
     }));
-  }, []);
+  }, [groupScreenRects]);
 
   const handleViewportPointerEnd = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
+      const groupSelectionState = groupSelectionStateRef.current;
+      if (groupSelectionState && groupSelectionState.pointerId === event.pointerId) {
+        if (!groupSelectionState.moved) {
+          setSelectedFurnitureId(null);
+          setSelectedGroupKeys([]);
+        }
+        if (groupSelectionState.moved) {
+          suppressContextMenuUntilRef.current = performance.now() + 250;
+        }
+        tryReleasePointerCapture(event.currentTarget, event.pointerId);
+        endInteraction();
+        return;
+      }
+
       const panState = panStateRef.current;
       if (!panState || panState.pointerId !== event.pointerId) {
         return;
@@ -2187,23 +2585,26 @@ export default function VirtualOffice({
         return;
       }
 
-      const nextPoint = {
-        x: Math.round(dragState.startValue.x + worldDx),
-        y: Math.round(dragState.startValue.y + worldDy),
-      };
-
       if (dragState.kind === "group") {
-        const deltaX = nextPoint.x - dragState.lastValue.x;
-        const deltaY = nextPoint.y - dragState.lastValue.y;
+        const nextDelta = {
+          x: Math.round(worldDx),
+          y: Math.round(worldDy),
+        };
+        const deltaX = nextDelta.x - dragState.lastDelta.x;
+        const deltaY = nextDelta.y - dragState.lastDelta.y;
         if (deltaX === 0 && deltaY === 0) {
           return;
         }
-        dragState.lastValue = nextPoint;
+        dragState.lastDelta = nextDelta;
 
-        if (dragState.linkedThreadIds.length > 0) {
+        const linkedThreadIds = dragState.groupKeys.flatMap(
+          (groupKey) => dragState.linkedThreadIdsByGroupKey[groupKey] ?? [],
+        );
+
+        if (linkedThreadIds.length > 0) {
           setOpenWindows((current) =>
             current.map((windowState) =>
-              dragState.linkedThreadIds.includes(windowState.threadId)
+              linkedThreadIds.includes(windowState.threadId)
                 ? {
                     ...windowState,
                     rect: {
@@ -2219,7 +2620,21 @@ export default function VirtualOffice({
 
         setOpenBrowserWindows((current) =>
           current.map((windowState) =>
-            windowState.groupKey === dragState.key
+            dragState.groupKeys.includes(windowState.groupKey)
+              ? {
+                  ...windowState,
+                  rect: {
+                    ...windowState.rect,
+                    x: windowState.rect.x + deltaX,
+                    y: windowState.rect.y + deltaY,
+                  },
+                }
+              : windowState,
+          ),
+        );
+        setOpenVsCodeWindows((current) =>
+          current.map((windowState) =>
+            dragState.groupKeys.includes(windowState.groupKey)
               ? {
                   ...windowState,
                   rect: {
@@ -2233,20 +2648,39 @@ export default function VirtualOffice({
         );
 
         setOfficeState((current) => {
-          const currentAnchor = current.projectGroupAnchors[dragState.key] ?? dragState.startValue;
-          if (currentAnchor.x === nextPoint.x && currentAnchor.y === nextPoint.y) {
+          let changed = false;
+          const nextProjectGroupAnchors = { ...current.projectGroupAnchors };
+          for (const groupKey of dragState.groupKeys) {
+            const startAnchor = dragState.startAnchorsByGroupKey[groupKey];
+            if (!startAnchor) {
+              continue;
+            }
+            const nextAnchor = {
+              x: startAnchor.x + nextDelta.x,
+              y: startAnchor.y + nextDelta.y,
+            };
+            const currentAnchor = current.projectGroupAnchors[groupKey] ?? startAnchor;
+            if (currentAnchor.x === nextAnchor.x && currentAnchor.y === nextAnchor.y) {
+              continue;
+            }
+            nextProjectGroupAnchors[groupKey] = nextAnchor;
+            changed = true;
+          }
+          if (!changed) {
             return current;
           }
           return {
             ...current,
-            projectGroupAnchors: {
-              ...current.projectGroupAnchors,
-              [dragState.key]: nextPoint,
-            },
+            projectGroupAnchors: nextProjectGroupAnchors,
           };
         });
         return;
       }
+
+      const nextPoint = {
+        x: Math.round(dragState.startValue.x + worldDx),
+        y: Math.round(dragState.startValue.y + worldDy),
+      };
 
       setOfficeState((current) => {
         if (dragState.kind === "desk") {
@@ -2307,7 +2741,9 @@ export default function VirtualOffice({
   const handleWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
     const target = event.target instanceof Element ? event.target : null;
     if (
-      target?.closest("[data-office-thread-window], [data-office-browser-window], [data-office-admin-window]")
+      target?.closest(
+        "[data-office-thread-window], [data-office-browser-window], [data-office-vscode-window], [data-office-admin-window]",
+      )
     ) {
       return;
     }
@@ -2370,6 +2806,7 @@ export default function VirtualOffice({
       data-camera-x={camera.x}
       data-camera-y={camera.y}
       data-camera-zoom={camera.zoom}
+      data-office-windows-minimized={officeWindowsMinimizedForZoom ? "true" : "false"}
       className={`relative h-full w-full overflow-hidden bg-background ${isInteracting ? "cursor-grabbing" : ""}`}
       style={backgroundStyle}
       onWheel={handleWheel}
@@ -2380,6 +2817,37 @@ export default function VirtualOffice({
       onContextMenu={handleViewportContextMenu}
     >
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-linear-to-t from-background via-background/70 to-transparent" />
+
+      {farOfficeLabels.map((label) => (
+        <div
+          key={label.key}
+          data-office-far-label={label.key}
+          className="pointer-events-none absolute z-10 max-w-72 -translate-x-1/2 -translate-y-1/2 rounded-full border px-4 py-2 text-center text-[20px] font-black tracking-[0.18em] text-foreground uppercase shadow-[0_18px_40px_-18px_rgba(15,23,42,0.9)] backdrop-blur-md"
+          style={{
+            left: label.center.x,
+            top: label.center.y,
+            borderColor: `${label.accentColor}88`,
+            background: `linear-gradient(180deg, ${label.accentColor}2e, rgba(15,23,42,0.82))`,
+            textShadow: "0 1px 0 rgba(15,23,42,0.9), 0 0 20px rgba(15,23,42,0.45)",
+            boxShadow: `0 0 0 1px ${label.accentColor}34, 0 18px 40px -18px rgba(15,23,42,0.9)`,
+          }}
+        >
+          {label.label}
+        </div>
+      ))}
+
+      {groupSelectionRect ? (
+        <div
+          data-office-group-selection-box=""
+          className="pointer-events-none absolute z-30 border-2 border-dashed border-primary/80 bg-primary/10 shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
+          style={{
+            left: groupSelectionRect.x,
+            top: groupSelectionRect.y,
+            width: groupSelectionRect.width,
+            height: groupSelectionRect.height,
+          }}
+        />
+      ) : null}
 
       <div className="pointer-events-none absolute left-4 top-4 z-20 flex max-w-[calc(100%-2rem)] items-center gap-2">
         <div
@@ -2411,6 +2879,9 @@ export default function VirtualOffice({
               </MenuItem>
               <MenuItem onClick={() => handleAddFurniture("coffeeBar")}>
                 {OFFICE_FURNITURE_LABELS.coffeeBar}
+              </MenuItem>
+              <MenuItem onClick={() => handleAddFurniture("serverRack")}>
+                {OFFICE_FURNITURE_LABELS.serverRack}
               </MenuItem>
               <MenuItem onClick={() => handleAddFurniture("chair")}>
                 {OFFICE_FURNITURE_LABELS.chair}
@@ -2536,6 +3007,43 @@ export default function VirtualOffice({
       ) : null}
 
       <div className="pointer-events-none absolute bottom-4 right-4 z-20 flex flex-col items-end gap-2">
+        <div className="pointer-events-auto flex w-[min(20rem,calc(100vw-2rem))] flex-col gap-1.5 rounded-2xl border border-border/70 bg-background/92 p-2.5 shadow-xl backdrop-blur-sm">
+          <div className="flex items-center justify-between px-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground/75">
+            <span>Offices</span>
+            <span className="text-muted-foreground">Jump to center</span>
+          </div>
+          <div className="flex flex-col gap-1 pr-0.5">
+            {scene.groups.map((group) => {
+              const isCentered = centeredGroupKey === group.key;
+              return (
+                <button
+                  key={group.key}
+                  type="button"
+                  data-office-shortcut={group.key}
+                  className="flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition-colors hover:bg-accent/60"
+                  style={{
+                    borderColor: isCentered ? `${group.accentColor}99` : `${group.accentColor}44`,
+                    backgroundColor: isCentered ? `${group.accentColor}1f` : `${group.accentColor}12`,
+                    boxShadow: isCentered ? `0 0 0 1px ${group.accentColor}30 inset` : undefined,
+                  }}
+                  onClick={() => {
+                    centerCameraOnGroup(group.key);
+                  }}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="inline-flex size-2.5 shrink-0 rounded-full border border-black/10"
+                    style={{ backgroundColor: group.accentColor }}
+                  />
+                  <span className="min-w-0 flex-1 truncate font-medium text-foreground">{group.label}</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                    {isCentered ? "Centered" : "Go"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
         <div
           data-office-minimap
           className="pointer-events-auto relative overflow-hidden rounded-2xl border border-border/70 bg-background/90 shadow-xl backdrop-blur-sm"
@@ -2558,7 +3066,7 @@ export default function VirtualOffice({
           <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between border-b border-border/60 bg-background/82 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground/75">
             <span>Mini Map</span>
             <span className="text-muted-foreground">
-              {openWindows.length + openBrowserWindows.length + (adminWindowRect ? 1 : 0)} windows
+              {expandedThreadWindows.length + openBrowserWindows.length + openVsCodeWindows.length + (adminWindowRect ? 1 : 0)} windows
             </span>
           </div>
           <svg
@@ -2618,6 +3126,21 @@ export default function VirtualOffice({
                 strokeDasharray="6 6"
               />
             ))}
+            {minimapState.vsCodeWindowRects.map((windowRect) => (
+              <rect
+                key={windowRect.id}
+                data-office-minimap-window={windowRect.id}
+                x={windowRect.rect.x}
+                y={windowRect.rect.y}
+                width={windowRect.rect.width}
+                height={windowRect.rect.height}
+                rx={5}
+                fill="rgba(255,255,255,0.03)"
+                stroke={windowRect.accentColor}
+                strokeWidth={1.5}
+                strokeDasharray="10 6"
+              />
+            ))}
             {minimapState.adminWindowRect ? (
               <rect
                 data-office-minimap-window="office-admin"
@@ -2656,7 +3179,7 @@ export default function VirtualOffice({
             />
           </svg>
           <div className="absolute bottom-2 left-3 text-[10px] text-muted-foreground/85">
-            Click to recenter
+            Click to recenter the camera
           </div>
         </div>
       </div>
@@ -2669,206 +3192,299 @@ export default function VirtualOffice({
         }}
       >
         {scene.groups.map((group) => (
-          <div
-            key={group.key}
-            data-office-group={group.key}
-            data-office-group-accent={group.accentColor}
-            data-office-group-width={Math.round(group.element.width)}
-            data-office-group-height={Math.round(group.element.height)}
-            className="absolute rounded-2xl border bg-background/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
-            style={{
-              left: group.element.x,
-              top: group.element.y,
-              width: group.element.width,
-              height: group.element.height,
-              borderColor: `${group.accentColor}90`,
-              boxShadow: `0 0 0 1px ${group.accentColor}24, inset 0 0 0 1px ${group.accentColor}20`,
-              background: `linear-gradient(180deg, ${group.accentColor}12, rgba(255,255,255,0.02))`,
-            }}
-            onPointerDown={(event) =>
-              beginDrag(event, {
-                pointerId: event.pointerId,
-                kind: "group",
-                key: group.key,
-                linkedThreadIds: group.deskThreadIds,
-                startPointer: { x: event.clientX, y: event.clientY },
-                startValue: { x: group.anchor.x, y: group.anchor.y },
-                lastValue: { x: group.anchor.x, y: group.anchor.y },
-                moved: false,
-              })
-            }
-            onPointerMove={handleDragPointerMove}
-            onPointerUp={handleDragPointerEnd}
-            onPointerCancel={handleDragPointerEnd}
-          >
-            <div
-              className="absolute left-1/2 top-0 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-full border bg-background/95 px-3 py-1 text-[10px] font-semibold tracking-[0.12em] text-foreground/75 uppercase shadow-sm"
-              style={{
-                borderColor: `${group.accentColor}88`,
-                boxShadow: `0 10px 30px -20px ${group.accentColor}`,
-              }}
-            >
-              <ProjectOfficeIcon cwd={group.cwd} />
-              <span>{group.label}</span>
+          (() => {
+            const isSelected = selectedGroupKeySet.has(group.key);
+            const dragGroupKeys = isSelected ? selectedGroupKeys : [group.key];
+            const linkedThreadIdsByGroupKey = Object.fromEntries(
+              dragGroupKeys.map((groupKey) => [groupKey, groupByKey.get(groupKey)?.deskThreadIds ?? []] as const),
+            );
+            const startAnchorsByGroupKey = Object.fromEntries(
+              dragGroupKeys.flatMap((groupKey) => {
+                const dragGroup = groupByKey.get(groupKey);
+                return dragGroup ? ([[groupKey, { x: dragGroup.anchor.x, y: dragGroup.anchor.y }] as const]) : [];
+              }),
+            );
+
+            return (
               <div
+                key={group.key}
+                data-office-group={group.key}
+                data-office-group-accent={group.accentColor}
+                data-office-group-width={Math.round(group.element.width)}
+                data-office-group-height={Math.round(group.element.height)}
+                data-office-group-collapsed={group.isCollapsed ? "true" : undefined}
+                data-office-group-selected={isSelected ? "true" : undefined}
+                className={`absolute rounded-2xl border bg-background/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] ${
+                  group.isCollapsed ? "overflow-hidden" : "overflow-visible"
+                }`}
+                style={{
+                  left: group.element.x,
+                  top: group.element.y,
+                  width: group.element.width,
+                  height: group.element.height,
+                  borderColor: `${group.accentColor}90`,
+                  boxShadow: isSelected
+                    ? `0 0 0 2px ${group.accentColor}88, 0 0 0 8px ${group.accentColor}14, inset 0 0 0 1px ${group.accentColor}24`
+                    : `0 0 0 1px ${group.accentColor}24, inset 0 0 0 1px ${group.accentColor}20`,
+                  background: group.isCollapsed
+                    ? `linear-gradient(180deg, ${group.accentColor}18, rgba(15,23,42,0.24))`
+                    : `linear-gradient(180deg, ${group.accentColor}12, rgba(255,255,255,0.02))`,
+                }}
                 onPointerDown={(event) => {
-                  event.stopPropagation();
+                  if (event.button !== 0) {
+                    return;
+                  }
+                  setSelectedGroupKeys(dragGroupKeys);
+                  beginDrag(event, {
+                    pointerId: event.pointerId,
+                    kind: "group",
+                    groupKeys: dragGroupKeys,
+                    linkedThreadIdsByGroupKey,
+                    startPointer: { x: event.clientX, y: event.clientY },
+                    startAnchorsByGroupKey,
+                    lastDelta: { x: 0, y: 0 },
+                    moved: false,
+                  });
+                }}
+                onPointerMove={handleDragPointerMove}
+                onPointerUp={handleDragPointerEnd}
+                onPointerCancel={handleDragPointerEnd}
+              >
+              <div
+                className={`absolute flex items-center gap-1.5 border bg-background/95 px-3 py-1 text-[10px] font-semibold tracking-[0.12em] text-foreground/75 uppercase shadow-sm ${
+                  group.isCollapsed
+                    ? "inset-x-2 top-2 rounded-xl"
+                    : "left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 rounded-full"
+                }`}
+                style={{
+                  borderColor: `${group.accentColor}88`,
+                  boxShadow: `0 10px 30px -20px ${group.accentColor}`,
                 }}
               >
-                <Menu>
-                  <MenuTrigger
-                    render={
-                      <button
-                        type="button"
-                        className="inline-flex h-5 items-center gap-1 rounded-full border px-1.5 shadow-sm transition-transform hover:scale-105"
-                        style={{
-                          borderColor: `${group.accentColor}88`,
-                          backgroundColor: `${group.accentColor}24`,
-                          boxShadow: `0 0 0 1px ${group.accentColor}22`,
-                        }}
-                        aria-label={`Change color for ${group.label}`}
-                        data-office-group-color-trigger={group.key}
-                      />
-                    }
-                  >
-                    <span
-                      className="inline-flex size-2.5 rounded-full border border-black/10"
-                      style={{ backgroundColor: group.accentColor }}
-                    />
-                    <span className="text-[10px] font-medium normal-case">Color</span>
-                  </MenuTrigger>
-                  <MenuPopup align="end" sideOffset={8}>
-                  <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Group color</div>
-                  <MenuItem
-                    data-office-group-color-option={`${group.key}:auto`}
-                    onClick={() => {
-                      setGroupAccentColor(group.key, null);
-                    }}
-                  >
-                    <div className="flex w-full items-center gap-2">
+                <ProjectOfficeIcon cwd={group.cwd} />
+                <span className="min-w-0 flex-1 truncate">{group.label}</span>
+                <div
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                  }}
+                >
+                  <Menu>
+                    <MenuTrigger
+                      render={
+                        <button
+                          type="button"
+                          className="inline-flex h-5 items-center gap-1 rounded-full border px-1.5 shadow-sm transition-transform hover:scale-105"
+                          style={{
+                            borderColor: `${group.accentColor}88`,
+                            backgroundColor: `${group.accentColor}24`,
+                            boxShadow: `0 0 0 1px ${group.accentColor}22`,
+                          }}
+                          aria-label={`Change color for ${group.label}`}
+                          data-office-group-color-trigger={group.key}
+                        />
+                      }
+                    >
                       <span
-                        className="inline-flex size-3 rounded-full border border-border/70 bg-linear-to-r from-transparent via-foreground/45 to-transparent"
-                        style={{
-                          boxShadow: `0 0 0 1px ${getDefaultOfficeGroupAccent(group.key)}24`,
-                        }}
+                        className="inline-flex size-2.5 rounded-full border border-black/10"
+                        style={{ backgroundColor: group.accentColor }}
                       />
-                      <span>Auto</span>
-                      <span className="ml-auto text-[10px] text-muted-foreground">
-                        {officeState.groupAccentColorsByKey[group.key] ? "" : "Selected"}
-                      </span>
-                    </div>
-                  </MenuItem>
-                  <MenuSeparator />
-                    {OFFICE_GROUP_ACCENT_OPTIONS.map((option) => (
+                      <span className="text-[10px] font-medium normal-case">Color</span>
+                    </MenuTrigger>
+                    <MenuPopup align="end" sideOffset={8}>
+                      <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Group color</div>
                       <MenuItem
-                        key={option.accentColor}
-                        data-office-group-color-option={`${group.key}:${option.accentColor}`}
+                        data-office-group-color-option={`${group.key}:auto`}
                         onClick={() => {
-                          setGroupAccentColor(group.key, option.accentColor);
+                          setGroupAccentColor(group.key, null);
                         }}
                       >
                         <div className="flex w-full items-center gap-2">
                           <span
-                            className="inline-flex size-3 rounded-full border border-black/10"
-                            style={{ backgroundColor: option.accentColor }}
+                            className="inline-flex size-3 rounded-full border border-border/70 bg-linear-to-r from-transparent via-foreground/45 to-transparent"
+                            style={{
+                              boxShadow: `0 0 0 1px ${getDefaultOfficeGroupAccent(group.key)}24`,
+                            }}
                           />
-                          <span>{option.label}</span>
+                          <span>Auto</span>
                           <span className="ml-auto text-[10px] text-muted-foreground">
-                            {officeState.groupAccentColorsByKey[group.key] === option.accentColor ? "Selected" : ""}
+                            {officeState.groupAccentColorsByKey[group.key] ? "" : "Selected"}
                           </span>
                         </div>
                       </MenuItem>
-                    ))}
-                  </MenuPopup>
-                </Menu>
+                      <MenuSeparator />
+                      {OFFICE_GROUP_ACCENT_OPTIONS.map((option) => (
+                        <MenuItem
+                          key={option.accentColor}
+                          data-office-group-color-option={`${group.key}:${option.accentColor}`}
+                          onClick={() => {
+                            setGroupAccentColor(group.key, option.accentColor);
+                          }}
+                        >
+                          <div className="flex w-full items-center gap-2">
+                            <span
+                              className="inline-flex size-3 rounded-full border border-black/10"
+                              style={{ backgroundColor: option.accentColor }}
+                            />
+                            <span>{option.label}</span>
+                            <span className="ml-auto text-[10px] text-muted-foreground">
+                              {officeState.groupAccentColorsByKey[group.key] === option.accentColor ? "Selected" : ""}
+                            </span>
+                          </div>
+                        </MenuItem>
+                      ))}
+                    </MenuPopup>
+                  </Menu>
+                </div>
+                <button
+                  type="button"
+                  className="inline-flex h-5 items-center gap-1 rounded-full border px-1.5 text-[10px] font-medium normal-case"
+                  style={{
+                    borderColor: `${group.accentColor}88`,
+                    color: group.accentColor,
+                    backgroundColor: `${group.accentColor}14`,
+                  }}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openCreateDialog(
+                      group.deskThreadIds[0]
+                        ? (mergedThreads.find((thread) => thread.id === group.deskThreadIds[0])?.projectId ?? null)
+                        : null,
+                    );
+                  }}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                  }}
+                  aria-label={`Create agent in ${group.label}`}
+                >
+                  <PlusIcon className="size-3" />
+                  Create
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex h-5 items-center gap-1 rounded-full border px-1.5 text-[10px] font-medium normal-case"
+                  style={{
+                    borderColor: `${group.accentColor}88`,
+                    color: group.accentColor,
+                    backgroundColor: `${group.accentColor}14`,
+                  }}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    toggleGroupCollapsed(group.key);
+                  }}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                  }}
+                  aria-label={`${group.isCollapsed ? "Expand" : "Collapse"} ${group.label}`}
+                  data-office-group-collapse={group.key}
+                >
+                  {group.isCollapsed ? <ChevronRightIcon className="size-3" /> : <ChevronDownIcon className="size-3" />}
+                  {group.isCollapsed ? "Expand" : "Collapse"}
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex h-5 items-center gap-1 rounded-full border px-1.5 text-[10px] font-medium normal-case text-red-200"
+                  style={{
+                    borderColor: "rgba(248,113,113,0.55)",
+                    backgroundColor: "rgba(127,29,29,0.22)",
+                  }}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void handleDeleteGroup(group.key);
+                  }}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                  }}
+                  aria-label={`Delete ${group.label}`}
+                  data-office-group-delete={group.key}
+                >
+                  <Trash2Icon className="size-3" />
+                  Delete
+                </button>
               </div>
-              <button
-                type="button"
-                className="ml-1 inline-flex h-5 items-center gap-1 rounded-full border px-1.5 text-[10px] font-medium normal-case"
-                style={{
-                  borderColor: `${group.accentColor}88`,
-                  color: group.accentColor,
-                  backgroundColor: `${group.accentColor}14`,
-                }}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  openCreateDialog(
-                    group.deskThreadIds[0]
-                      ? (mergedThreads.find((thread) => thread.id === group.deskThreadIds[0])?.projectId ?? null)
-                      : null,
-                  );
-                }}
-                onPointerDown={(event) => {
-                  event.stopPropagation();
-                }}
-                aria-label={`Create agent in ${group.label}`}
-              >
-                <PlusIcon className="size-3" />
-                Create
-              </button>
-            </div>
-            <div
-              className="absolute inset-x-6 bottom-4 h-px bg-linear-to-r from-transparent to-transparent"
-              style={{
-                backgroundImage: `linear-gradient(90deg, transparent, ${group.accentColor}80, transparent)`,
-              }}
-            />
-            <div
-              className="absolute bottom-0 right-0 z-10 h-5 w-5 cursor-nwse-resize rounded-tl-md border-l border-t bg-background/92 shadow-sm"
-              style={{
-                borderColor: `${group.accentColor}66`,
-                boxShadow: `-1px -1px 0 0 ${group.accentColor}20`,
-              }}
-              data-office-group-resize={group.key}
-              onPointerDown={(event) =>
-                (() => {
-                  const startDeskOffsetsByThreadId = Object.fromEntries(
-                    group.deskThreadIds.flatMap((threadId) => {
-                      const deskScene = deskByThreadId.get(threadId);
-                      if (!deskScene) {
-                        return [];
-                      }
-                      const offset =
-                        officeState.deskOffsetsByThreadId[threadId] ?? {
-                          x: deskScene.element.x - group.anchor.x,
-                          y: deskScene.element.y - group.anchor.y,
-                        };
-                      return [[threadId, offset] as const];
-                    }),
-                  );
-                  const startOffsets = Object.values(startDeskOffsetsByThreadId);
-                  return beginDrag(event, {
-                  pointerId: event.pointerId,
-                  kind: "groupResize",
-                  key: group.key,
-                  linkedThreadIds: group.deskThreadIds,
-                  startPointer: { x: event.clientX, y: event.clientY },
-                  startSize: {
-                    width: group.element.width,
-                    height: group.element.height,
-                  },
-                  startMinOffset: {
-                    x: startOffsets.length > 0 ? Math.min(...startOffsets.map((offset) => offset.x)) : GROUP_DESK_LAYOUT_LEFT_PADDING,
-                    y: startOffsets.length > 0 ? Math.min(...startOffsets.map((offset) => offset.y)) : GROUP_DESK_LAYOUT_TOP_PADDING,
-                  },
-                  startDeskOffsetsByThreadId,
-                  moved: false,
-                  });
-                })()
-              }
-            >
-              <div
-                className="absolute bottom-1.5 right-1.5 h-2 w-2 rounded-[2px] border-r border-b"
-                style={{ borderColor: `${group.accentColor}aa` }}
-              />
-            </div>
-          </div>
+              {!group.isCollapsed ? (
+                <>
+                  <div
+                    className="absolute inset-x-6 bottom-4 h-px bg-linear-to-r from-transparent to-transparent"
+                    style={{
+                      backgroundImage: `linear-gradient(90deg, transparent, ${group.accentColor}80, transparent)`,
+                    }}
+                  />
+                  <div
+                    className="absolute bottom-0 right-0 z-10 h-5 w-5 cursor-nwse-resize rounded-tl-md border-l border-t bg-background/92 shadow-sm"
+                    style={{
+                      borderColor: `${group.accentColor}66`,
+                      boxShadow: `-1px -1px 0 0 ${group.accentColor}20`,
+                    }}
+                    data-office-group-resize={group.key}
+                    onPointerDown={(event) =>
+                      (() => {
+                        if (event.button !== 0) {
+                          return;
+                        }
+                        setSelectedGroupKeys([group.key]);
+                        const startDeskOffsetsByThreadId = Object.fromEntries(
+                          group.deskThreadIds.flatMap((threadId) => {
+                            const deskScene = deskByThreadId.get(threadId);
+                            if (!deskScene) {
+                              return [];
+                            }
+                            const offset =
+                              officeState.deskOffsetsByThreadId[threadId] ?? {
+                                x: deskScene.element.x - group.anchor.x,
+                                y: deskScene.element.y - group.anchor.y,
+                              };
+                            return [[threadId, offset] as const];
+                          }),
+                        );
+                        const startOffsets = Object.values(startDeskOffsetsByThreadId);
+                        return beginDrag(event, {
+                          pointerId: event.pointerId,
+                          kind: "groupResize",
+                          key: group.key,
+                          linkedThreadIds: group.deskThreadIds,
+                          startPointer: { x: event.clientX, y: event.clientY },
+                          startSize: {
+                            width: group.element.width,
+                            height: group.element.height,
+                          },
+                          startMinOffset: {
+                            x:
+                              startOffsets.length > 0
+                                ? Math.min(...startOffsets.map((offset) => offset.x))
+                                : GROUP_DESK_LAYOUT_LEFT_PADDING,
+                            y:
+                              startOffsets.length > 0
+                                ? Math.min(...startOffsets.map((offset) => offset.y))
+                                : GROUP_DESK_LAYOUT_TOP_PADDING,
+                          },
+                          startDeskOffsetsByThreadId,
+                          moved: false,
+                        });
+                      })()
+                    }
+                  >
+                    <div
+                      className="absolute bottom-1.5 right-1.5 h-2 w-2 rounded-[2px] border-r border-b"
+                      style={{ borderColor: `${group.accentColor}aa` }}
+                    />
+                  </div>
+                </>
+              ) : null}
+              </div>
+            );
+          })()
         ))}
 
         {scene.furniture.map((element) => {
           const tvGroupKey =
             element.type === "tv" && typeof element.metadata?.groupKey === "string"
+              ? element.metadata.groupKey
+              : null;
+          const serverRackGroupKey =
+            element.type === "serverRack" && typeof element.metadata?.groupKey === "string"
               ? element.metadata.groupKey
               : null;
 
@@ -2890,7 +3506,13 @@ export default function VirtualOffice({
               onPointerMove={handleDragPointerMove}
               onPointerUp={handleDragPointerEnd}
               onPointerCancel={handleDragPointerEnd}
-              onClick={tvGroupKey ? () => handleTvClick(tvGroupKey) : undefined}
+              onClick={
+                tvGroupKey
+                  ? () => handleTvClick(tvGroupKey)
+                  : serverRackGroupKey
+                    ? () => handleServerRackClick(serverRackGroupKey)
+                    : undefined
+              }
             />
           );
         })}
@@ -3161,101 +3783,181 @@ export default function VirtualOffice({
           );
         })}
 
-        <svg
-          className="pointer-events-none absolute left-0 top-0 overflow-visible"
-          width={1}
-          height={1}
-        >
-            {openWindowConnections.map((connection) => (
-              <g key={connection.threadId} data-office-thread-link={connection.threadId}>
-                <line
-                  x1={connection.deskPoint.x}
-                  y1={connection.deskPoint.y}
-                  x2={connection.windowPoint.x}
-                  y2={connection.windowPoint.y}
-                  stroke={connection.accentColor}
-                  strokeOpacity="0.7"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeDasharray="6 8"
-                />
-                <circle
-                  cx={connection.deskPoint.x}
-                  cy={connection.deskPoint.y}
-                  r="4.5"
-                  fill={connection.accentColor}
-                  fillOpacity="0.9"
-                />
-                <circle
-                  cx={connection.windowPoint.x}
-                  cy={connection.windowPoint.y}
-                  r="4.5"
-                  fill={connection.accentColor}
-                  fillOpacity="0.9"
-                />
-              </g>
-            ))}
-            {openBrowserWindowConnections.map((connection) => (
-              <g key={connection.groupKey} data-office-browser-link={connection.groupKey}>
-                <line
-                  x1={connection.tvPoint.x}
-                  y1={connection.tvPoint.y}
-                  x2={connection.windowPoint.x}
-                  y2={connection.windowPoint.y}
-                  stroke={connection.accentColor}
-                  strokeOpacity="0.72"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeDasharray="6 8"
-                />
-                <circle
-                  cx={connection.tvPoint.x}
-                  cy={connection.tvPoint.y}
-                  r="4.5"
-                  fill={connection.accentColor}
-                  fillOpacity="0.9"
-                />
-                <circle
-                  cx={connection.windowPoint.x}
-                  cy={connection.windowPoint.y}
-                  r="4.5"
-                  fill={connection.accentColor}
-                  fillOpacity="0.9"
-                />
-              </g>
-            ))}
-        </svg>
+        {officeWindowsMinimizedForZoom ? null : (
+          <svg
+            className="pointer-events-none absolute left-0 top-0 overflow-visible"
+            width={1}
+            height={1}
+          >
+              {openWindowConnections.map((connection) => (
+                <g key={connection.threadId} data-office-thread-link={connection.threadId}>
+                  <line
+                    x1={connection.deskPoint.x}
+                    y1={connection.deskPoint.y}
+                    x2={connection.windowPoint.x}
+                    y2={connection.windowPoint.y}
+                    stroke={connection.accentColor}
+                    strokeOpacity="0.7"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeDasharray="6 8"
+                  />
+                  <circle
+                    cx={connection.deskPoint.x}
+                    cy={connection.deskPoint.y}
+                    r="4.5"
+                    fill={connection.accentColor}
+                    fillOpacity="0.9"
+                  />
+                  <circle
+                    cx={connection.windowPoint.x}
+                    cy={connection.windowPoint.y}
+                    r="4.5"
+                    fill={connection.accentColor}
+                    fillOpacity="0.9"
+                  />
+                </g>
+              ))}
+              {openBrowserWindowConnections.map((connection) => (
+                <g key={connection.groupKey} data-office-browser-link={connection.groupKey}>
+                  <line
+                    x1={connection.tvPoint.x}
+                    y1={connection.tvPoint.y}
+                    x2={connection.windowPoint.x}
+                    y2={connection.windowPoint.y}
+                    stroke={connection.accentColor}
+                    strokeOpacity="0.72"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeDasharray="6 8"
+                  />
+                  <circle
+                    cx={connection.tvPoint.x}
+                    cy={connection.tvPoint.y}
+                    r="4.5"
+                    fill={connection.accentColor}
+                    fillOpacity="0.9"
+                  />
+                  <circle
+                    cx={connection.windowPoint.x}
+                    cy={connection.windowPoint.y}
+                    r="4.5"
+                    fill={connection.accentColor}
+                    fillOpacity="0.9"
+                  />
+                </g>
+              ))}
+              {openVsCodeWindowConnections.map((connection) => (
+                <g key={connection.groupKey} data-office-vscode-link={connection.groupKey}>
+                  <line
+                    x1={connection.rackPoint.x}
+                    y1={connection.rackPoint.y}
+                    x2={connection.windowPoint.x}
+                    y2={connection.windowPoint.y}
+                    stroke={connection.accentColor}
+                    strokeOpacity="0.76"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeDasharray="10 8"
+                  />
+                  <circle
+                    cx={connection.rackPoint.x}
+                    cy={connection.rackPoint.y}
+                    r="4.5"
+                    fill={connection.accentColor}
+                    fillOpacity="0.9"
+                  />
+                  <circle
+                    cx={connection.windowPoint.x}
+                    cy={connection.windowPoint.y}
+                    r="4.5"
+                    fill={connection.accentColor}
+                    fillOpacity="0.9"
+                  />
+                </g>
+              ))}
+          </svg>
+        )}
 
-        {openWindows.map((windowState, index) => {
+      </div>
+      <div data-office-windows-overlay="" className="pointer-events-none absolute inset-0 z-20">
+        {minimizedThreadWindows.map((windowState, index) => {
           const desk = deskByThreadId.get(windowState.threadId);
-          if (!desk) {
+          const previewRect = projectedThreadPreviewRects.get(windowState.threadId);
+          if (!desk || !previewRect) {
             return null;
           }
 
           return (
-            <OfficeThreadWindow
-              key={windowState.threadId}
+            <OfficeThreadWindowPreview
+              key={`minimized:${windowState.threadId}`}
               threadId={windowState.threadId}
-              rect={windowState.rect}
-              zoom={camera.zoom}
+              rect={previewRect}
               zIndex={windowZIndices.get(`thread:${windowState.threadId}`) ?? 19_000 + index}
-              isFocused={isAdminWindowFocused ? false : windowStackOrder[windowStackOrder.length - 1] === `thread:${windowState.threadId}`}
               accentColor={desk.accentColor}
               projects={projects}
               threads={mergedThreads}
-              onClose={() => closeThreadWindow(windowState.threadId)}
-              onDelete={handleDeleteThread}
-              onRename={handleRenameThread}
-              onFocus={() => focusThreadWindow(windowState.threadId)}
-              onRectChange={(rect) => updateThreadWindowRect(windowState.threadId, rect)}
-              {...(onOpenThreadInMainWindow ? { onOpenInMainWindow: onOpenThreadInMainWindow } : {})}
+              onFocus={() => openThreadWindow(windowState.threadId)}
             />
           );
         })}
 
-        {openBrowserWindows.map((windowState, index) => {
+        {officeWindowsMinimizedForZoom
+          ? expandedThreadWindows.map((windowState, index) => {
+              const desk = deskByThreadId.get(windowState.threadId);
+              const previewRect = projectedThreadPreviewRects.get(windowState.threadId);
+              if (!desk || !previewRect) {
+                return null;
+              }
+
+              return (
+                <OfficeThreadWindowPreview
+                  key={`zoom-preview:${windowState.threadId}`}
+                  threadId={windowState.threadId}
+                  rect={previewRect}
+                  zIndex={windowZIndices.get(`thread:${windowState.threadId}`) ?? 19_000 + index}
+                  accentColor={desk.accentColor}
+                  projects={projects}
+                  threads={mergedThreads}
+                  onFocus={() => focusThreadWindow(windowState.threadId)}
+                />
+              );
+            })
+          : expandedThreadWindows.map((windowState, index) => {
+              const desk = deskByThreadId.get(windowState.threadId);
+              const displayRect = projectedThreadWindowRects.get(windowState.threadId);
+              if (!desk || !displayRect) {
+                return null;
+              }
+
+              return (
+                <OfficeThreadWindow
+                  key={windowState.threadId}
+                  threadId={windowState.threadId}
+                  rect={windowState.rect}
+                  displayRect={displayRect}
+                  zoom={camera.zoom}
+                  zIndex={windowZIndices.get(`thread:${windowState.threadId}`) ?? 19_000 + index}
+                  isFocused={isAdminWindowFocused ? false : windowStackOrder[windowStackOrder.length - 1] === `thread:${windowState.threadId}`}
+                  accentColor={desk.accentColor}
+                  projects={projects}
+                  threads={mergedThreads}
+                  onClose={() => closeThreadWindow(windowState.threadId)}
+                  onDelete={handleDeleteThread}
+                  onRename={handleRenameThread}
+                  onFocus={() => focusThreadWindow(windowState.threadId)}
+                  onRectChange={(rect) => updateThreadWindowRect(windowState.threadId, rect)}
+                  {...(onOpenThreadInMainWindow ? { onOpenInMainWindow: onOpenThreadInMainWindow } : {})}
+                />
+              );
+            })}
+
+        {officeWindowsMinimizedForZoom
+          ? null
+          : openBrowserWindows.map((windowState, index) => {
           const group = groupByKey.get(windowState.groupKey);
-          if (!group) {
+          const displayRect = projectedBrowserWindowRects.get(windowState.groupKey);
+          if (!group || !displayRect) {
             return null;
           }
 
@@ -3265,6 +3967,7 @@ export default function VirtualOffice({
               groupKey={windowState.groupKey}
               groupLabel={group.label}
               rect={windowState.rect}
+              displayRect={displayRect}
               zoom={camera.zoom}
               zIndex={windowZIndices.get(`browser:${windowState.groupKey}`) ?? 19_500 + index}
               isFocused={windowStackOrder[windowStackOrder.length - 1] === `browser:${windowState.groupKey}`}
@@ -3281,9 +3984,40 @@ export default function VirtualOffice({
           );
         })}
 
-        {adminWindowRect ? (
+        {officeWindowsMinimizedForZoom
+          ? null
+          : openVsCodeWindows.map((windowState, index) => {
+          const group = groupByKey.get(windowState.groupKey);
+          const displayRect = projectedVsCodeWindowRects.get(windowState.groupKey);
+          if (!group || !displayRect) {
+            return null;
+          }
+
+          return (
+            <OfficeVsCodeWindow
+              key={windowState.groupKey}
+              groupKey={windowState.groupKey}
+              groupLabel={group.label}
+              rect={windowState.rect}
+              displayRect={displayRect}
+              zoom={camera.zoom}
+              zIndex={windowZIndices.get(`vscode:${windowState.groupKey}`) ?? 19_700 + index}
+              isFocused={windowStackOrder[windowStackOrder.length - 1] === `vscode:${windowState.groupKey}`}
+              accentColor={group.accentColor}
+              workspacePath={windowState.workspacePath}
+              isDesktopAvailable={windowState.isDesktopAvailable}
+              onClose={() => closeVsCodeWindow(windowState.groupKey)}
+              onFocus={() => focusVsCodeWindow(windowState.groupKey)}
+              onRectChange={(rect) => updateVsCodeWindowRect(windowState.groupKey, rect)}
+              onReopenInVsCode={() => openVsCodeWindow(windowState.groupKey, { relaunch: true })}
+            />
+          );
+        })}
+
+        {adminWindowRect && projectedAdminWindowRect ? (
           <OfficeAdminWindow
             rect={adminWindowRect}
+            displayRect={projectedAdminWindowRect}
             zoom={camera.zoom}
             zIndex={windowZIndices.get("admin:office-admin") ?? 19_999}
             isFocused={isAdminWindowFocused}

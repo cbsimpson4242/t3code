@@ -10,6 +10,11 @@ import type {
   OfficeSize,
 } from "./officeTypes";
 
+function snapToDevicePixels(value: number, devicePixelRatio: number): number {
+  const pixelRatio = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1;
+  return Math.round(value * pixelRatio) / pixelRatio;
+}
+
 export function clampZoom(
   zoom: number,
   minimumZoom = OFFICE_MIN_ZOOM,
@@ -29,6 +34,28 @@ export function worldToScreen(point: OfficePoint, camera: OfficeCameraState): Of
   return {
     x: point.x * camera.zoom + camera.x,
     y: point.y * camera.zoom + camera.y,
+  };
+}
+
+export function worldRectToScreenRect(input: {
+  rect: OfficePoint & OfficeSize;
+  camera: OfficeCameraState;
+  devicePixelRatio?: number;
+  sizeZoom?: number;
+}): OfficePoint & OfficeSize {
+  const topLeft = worldToScreen({ x: input.rect.x, y: input.rect.y }, input.camera);
+  const pixelRatio = input.devicePixelRatio ?? 1;
+  const sizeZoom = input.sizeZoom ?? input.camera.zoom;
+  const x = snapToDevicePixels(topLeft.x, pixelRatio);
+  const y = snapToDevicePixels(topLeft.y, pixelRatio);
+  const right = snapToDevicePixels(topLeft.x + input.rect.width * sizeZoom, pixelRatio);
+  const bottom = snapToDevicePixels(topLeft.y + input.rect.height * sizeZoom, pixelRatio);
+
+  return {
+    x,
+    y,
+    width: Math.max(right - x, 1 / Math.max(pixelRatio, 1)),
+    height: Math.max(bottom - y, 1 / Math.max(pixelRatio, 1)),
   };
 }
 

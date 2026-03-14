@@ -23,7 +23,10 @@ type ResizeDirection = "right" | "bottom" | "corner";
 
 interface OfficeWindowFrameProps {
   rect: OfficeWindowRect;
+  displayRect?: OfficeWindowRect | undefined;
   zoom: number;
+  dragZoom?: number;
+  resizeZoom?: number;
   zIndex: number;
   isFocused: boolean;
   accentColor: string;
@@ -137,7 +140,10 @@ export function getOfficeBrowserWindowDefaultSize() {
 
 export default function OfficeWindowFrame({
   rect,
+  displayRect,
   zoom,
+  dragZoom,
+  resizeZoom,
   zIndex,
   isFocused,
   accentColor,
@@ -152,6 +158,10 @@ export default function OfficeWindowFrame({
   dragExclusionSelector = "button, input, [data-office-window-header-interactive='true']",
   resizeHandleDataAttribute,
 }: OfficeWindowFrameProps) {
+  const renderedRect = displayRect ?? rect;
+  const dragScale = Math.max(dragZoom ?? zoom, 0.0001);
+  const resizeScale = Math.max(resizeZoom ?? zoom, 0.0001);
+
   const dragStateRef = useRef<null | {
     pointerId: number;
     startX: number;
@@ -180,16 +190,15 @@ export default function OfficeWindowFrame({
         return;
       }
       event.preventDefault();
-      const zoomScale = Math.max(zoom, 0.0001);
       onRectChange(
         normalizeOfficeWindowRect({
           ...dragState.startRect,
-          x: dragState.startRect.x + (event.clientX - dragState.startX) / zoomScale,
-          y: dragState.startRect.y + (event.clientY - dragState.startY) / zoomScale,
+          x: dragState.startRect.x + (event.clientX - dragState.startX) / dragScale,
+          y: dragState.startRect.y + (event.clientY - dragState.startY) / dragScale,
         }),
       );
     },
-    [onRectChange, zoom],
+    [dragScale, onRectChange],
   );
 
   const handleResizePointerMove = useCallback(
@@ -199,9 +208,8 @@ export default function OfficeWindowFrame({
         return;
       }
       event.preventDefault();
-      const zoomScale = Math.max(zoom, 0.0001);
-      const deltaX = (event.clientX - resizeState.startX) / zoomScale;
-      const deltaY = (event.clientY - resizeState.startY) / zoomScale;
+      const deltaX = (event.clientX - resizeState.startX) / resizeScale;
+      const deltaY = (event.clientY - resizeState.startY) / resizeScale;
       const nextRect = { ...resizeState.startRect };
       if (resizeState.direction === "right" || resizeState.direction === "corner") {
         nextRect.width = resizeState.startRect.width + deltaX;
@@ -211,7 +219,7 @@ export default function OfficeWindowFrame({
       }
       onRectChange(normalizeOfficeWindowRect(nextRect));
     },
-    [onRectChange, zoom],
+    [onRectChange, resizeScale],
   );
 
   useEffect(() => {
@@ -241,14 +249,14 @@ export default function OfficeWindowFrame({
   }, [handleDragPointerMove, handleResizePointerMove]);
 
   return (
-    <div
-      className="absolute"
-      style={{
-        left: rect.x,
-        top: rect.y,
-        zIndex,
-      }}
-    >
+      <div
+        className="absolute"
+        style={{
+          left: renderedRect.x,
+          top: renderedRect.y,
+          zIndex,
+        }}
+      >
       <div
         {...rootAttributes}
         className="pointer-events-auto relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[24px] border bg-background/96 shadow-2xl backdrop-blur-xl"
@@ -257,8 +265,8 @@ export default function OfficeWindowFrame({
           boxShadow: isFocused
             ? `0 20px 60px -28px ${accentColor}90, 0 0 0 1px ${accentColor}40`
             : `0 16px 42px -28px ${accentColor}78, 0 0 0 1px ${accentColor}20`,
-          width: rect.width,
-          height: rect.height,
+          width: renderedRect.width,
+          height: renderedRect.height,
         }}
         onPointerDownCapture={() => onFocus()}
       >
