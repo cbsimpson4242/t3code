@@ -6,10 +6,10 @@ import { areOfficePersistedStatesEqual, parseOfficePersistedState } from "./offi
 describe("officePersistence", () => {
   it("returns null for invalid persisted payloads", () => {
     expect(parseOfficePersistedState(null)).toBeNull();
-    expect(parseOfficePersistedState({ version: 4 })).toBeNull();
+    expect(parseOfficePersistedState({ version: 5 })).toBeNull();
     expect(
       parseOfficePersistedState({
-        version: 3,
+        version: 4,
         camera: { x: 0, y: 0, zoom: 1 },
         furniture: [{ id: "plant-1", type: "plant", width: 56, height: 70, draggable: true }],
         projectGroupAnchors: {},
@@ -18,7 +18,7 @@ describe("officePersistence", () => {
     ).toBeNull();
     expect(
       parseOfficePersistedState({
-        version: 3,
+        version: 4,
         camera: { x: 0, y: 0, zoom: 1 },
         furniture: [],
         projectGroupAnchors: {},
@@ -28,7 +28,7 @@ describe("officePersistence", () => {
     ).toBeNull();
   });
 
-  it("accepts a valid v3 payload and compares persisted states deeply", () => {
+  it("accepts a valid v4 payload and compares persisted states deeply", () => {
     const state = createDefaultOfficePersistedState();
     const parsed = parseOfficePersistedState(state);
 
@@ -66,7 +66,7 @@ describe("officePersistence", () => {
       groupAccentColorsByKey: {},
     });
 
-    expect(parsed?.version).toBe(3);
+    expect(parsed?.version).toBe(4);
     expect(parsed?.defaultFurnitureSeededGroupKeys).toEqual([]);
     expect(parsed?.furniture.some((element) => element.id === "water-cooler")).toBe(false);
     expect(parsed?.furniture.find((element) => element.id === "plant-extra")?.placement).toEqual({
@@ -112,7 +112,7 @@ describe("officePersistence", () => {
     expect(parsed?.defaultFurnitureSeededGroupKeys).toEqual(["group-a"]);
   });
 
-  it("accepts TVs in persisted v3 furniture records", () => {
+  it("drops legacy TVs from persisted v3 furniture records", () => {
     const parsed = parseOfficePersistedState({
       version: 3,
       camera: { x: 0, y: 0, zoom: 1 },
@@ -142,10 +142,68 @@ describe("officePersistence", () => {
       defaultFurnitureSeededGroupKeys: ["group-a"],
     });
 
-    expect(parsed?.furniture[0]?.type).toBe("tv");
-    expect(parsed?.furniture[0]?.metadata).toEqual({
-      groupKey: "group-a",
-      role: "tv",
+    expect(parsed?.furniture).toEqual([]);
+  });
+
+  it("drops legacy server racks from persisted v3 furniture records", () => {
+    const parsed = parseOfficePersistedState({
+      version: 3,
+      camera: { x: 0, y: 0, zoom: 1 },
+      furniture: [
+        {
+          id: "group:group-a:server-rack",
+          type: "serverRack",
+          width: 96,
+          height: 128,
+          draggable: true,
+          placement: {
+            kind: "groupLinked",
+            groupKey: "group-a",
+            offset: { x: 386, y: 166 },
+          },
+          metadata: {
+            groupKey: "group-a",
+            role: "serverRack",
+          },
+        },
+      ],
+      projectGroupAnchors: { "group-a": { x: 220, y: 88 } },
+      projectGroupSizesByKey: {},
+      deskOffsetsByThreadId: {},
+      groupAccentColorsByKey: {},
+      adminDeskPosition: { x: 40, y: 40 },
+      defaultFurnitureSeededGroupKeys: ["group-a"],
     });
+
+    expect(parsed?.furniture).toEqual([]);
+  });
+
+  it("drops legacy linked coffee bars that powered the removed rack", () => {
+    const parsed = parseOfficePersistedState({
+      version: 3,
+      camera: { x: 0, y: 0, zoom: 1 },
+      furniture: [
+        {
+          id: "group:group-a:coffee-bar",
+          type: "coffeeBar",
+          width: 96,
+          height: 128,
+          draggable: true,
+          placement: {
+            kind: "groupLinked",
+            groupKey: "group-a",
+            offset: { x: 386, y: 166 },
+          },
+        },
+      ],
+      projectGroupAnchors: { "group-a": { x: 220, y: 88 } },
+      projectGroupSizesByKey: {},
+      deskOffsetsByThreadId: {},
+      groupAccentColorsByKey: {},
+      adminDeskPosition: { x: 40, y: 40 },
+      defaultFurnitureSeededGroupKeys: ["group-a"],
+    });
+
+    expect(parsed?.furniture).toEqual([]);
   });
 });

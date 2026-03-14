@@ -6,6 +6,8 @@ import {
   DESK_BOT_TARGET,
   DESK_HEIGHT,
   DESK_WIDTH,
+  GROUP_COLLAPSED_HEIGHT,
+  GROUP_COLLAPSED_WIDTH,
   GROUP_FRAME_BOTTOM_PADDING,
   GROUP_FRAME_SIDE_PADDING,
   GROUP_FRAME_TOP_PADDING,
@@ -15,6 +17,7 @@ import {
 import { resolveOfficeGroupAccent } from "./officeColors";
 import {
   createDefaultOfficeFurnitureForGroup,
+  getDefaultOfficeFurnitureBackfillIds,
   getDefaultOfficeFurnitureFootprint,
   resolveOfficeFurniture,
 } from "./officeFurniture";
@@ -119,7 +122,15 @@ function nextDeskOffset(existingOffsets: OfficePoint[]): OfficePoint {
   };
 }
 
-const TV_FURNITURE_SEEDED_PREFIX = "tv:";
+const DEFAULT_FURNITURE_SEEDED_PREFIX = "default-furniture:";
+
+function createDefaultFurnitureSeedMarker(furnitureId: string): string {
+  return `${DEFAULT_FURNITURE_SEEDED_PREFIX}${furnitureId}`;
+}
+
+function readLegacyDefaultFurnitureSeedMarker(): string | null {
+  return null;
+}
 
 function clonePersistedFurniture(furniture: OfficePersistedFurniture): OfficePersistedFurniture {
   return {
@@ -168,6 +179,7 @@ export function deriveOfficeInputs(
       key: string;
       label: string;
       cwd: string | null;
+      projectRoot: string | null;
       threads: Thread[];
     }
   >();
@@ -186,6 +198,7 @@ export function deriveOfficeInputs(
       key,
       label,
       cwd,
+      projectRoot: project?.cwd ?? null,
       threads: [thread],
     });
   }
@@ -194,6 +207,7 @@ export function deriveOfficeInputs(
     key: group.key,
     label: group.label,
     cwd: group.cwd,
+    projectRoot: group.projectRoot,
     threadIds: group.threads.map((thread) => thread.id),
   }));
 
@@ -225,8 +239,17 @@ export function buildOfficeScene(input: {
   desks: OfficeDeskInput[];
   persistedState: OfficePersistedState;
 }): OfficeSceneBuildResult {
+  const validGroupKeys = new Set(input.groups.map((group) => group.key));
+  const hiddenGroupKeys = new Set(input.persistedState.hiddenGroupKeys.filter((groupKey) => validGroupKeys.has(groupKey)));
+  const expandedGroupKeys = new Set(
+    input.persistedState.expandedGroupKeys.filter((groupKey) => validGroupKeys.has(groupKey) && !hiddenGroupKeys.has(groupKey)),
+  );
+  const visibleGroups = input.groups.filter((group) => !hiddenGroupKeys.has(group.key));
+  const visibleGroupKeys = new Set(visibleGroups.map((group) => group.key));
+  const visibleDesks = input.desks.filter((desk) => visibleGroupKeys.has(desk.groupKey));
+
   const desksByGroupKey = new Map<string, OfficeDeskInput[]>();
-  for (const desk of input.desks) {
+  for (const desk of visibleDesks) {
     const next = desksByGroupKey.get(desk.groupKey);
     if (next) {
       next.push(desk);
@@ -237,7 +260,7 @@ export function buildOfficeScene(input: {
 
   const nextProjectGroupAnchors: Record<string, OfficePoint> = {};
   const nextProjectGroupSizesByKey: Record<string, OfficeSize> = {};
-  for (const group of input.groups) {
+  for (const group of visibleGroups) {
     const anchor = input.persistedState.projectGroupAnchors[group.key];
     if (anchor) {
       nextProjectGroupAnchors[group.key] = anchor;
@@ -246,42 +269,48 @@ export function buildOfficeScene(input: {
     nextProjectGroupAnchors[group.key] = nextGroupAnchor(Object.values(nextProjectGroupAnchors));
   }
 
-  const seededGroupKeys = new Set(
-    input.persistedState.defaultFurnitureSeededGroupKeys.filter(
-      (entry) => !entry.startsWith(TV_FURNITURE_SEEDED_PREFIX),
-    ),
-  );
-  const tvSeededGroupKeys = new Set(
-    input.persistedState.defaultFurnitureSeededGroupKeys.flatMap((entry) =>
-      entry.startsWith(TV_FURNITURE_SEEDED_PREFIX)
-        ? [entry.slice(TV_FURNITURE_SEEDED_PREFIX.length)]
-        : [],
-    ),
-  );
+  const seededGroupKeys = new Set<string>();
+  const seededFurnitureMarkers = new Set<string>();
+  for (const entry of input.persistedState.defaultFurnitureSeededGroupKeys) {
+    if (entry.startsWith(DEFAULT_FURNITURE_SEEDED_PREFIX)) {
+      seededFurnitureMarkers.add(entry);
+      continue;
+    }
+    const legacyMarker = readLegacyDefaultFurnitureSeedMarker();
+    if (legacyMarker) {
+      seededFurnitureMarkers.add(legacyMarker);
+      continue;
+    }
+    seededGroupKeys.add(entry);
+  }
   const nextPersistedFurniture = input.persistedState.furniture.map(clonePersistedFurniture);
-  for (const group of input.groups) {
-    const groupHasPersistedTv = nextPersistedFurniture.some(
-      (element) =>
-        element.type === "tv" &&
-        element.placement.kind === "groupLinked" &&
-        element.placement.groupKey === group.key,
-    );
+  for (const group of visibleGroups) {
+    const defaultFurniture = createDefaultOfficeFurnitureForGroup(group.key, nextPersistedFurniture);
 
     if (!seededGroupKeys.has(group.key)) {
-      nextPersistedFurniture.push(...createDefaultOfficeFurnitureForGroup(group.key, nextPersistedFurniture));
+      nextPersistedFurniture.push(...defaultFurniture);
       seededGroupKeys.add(group.key);
-      tvSeededGroupKeys.add(group.key);
+      for (const furniture of defaultFurniture) {
+        seededFurnitureMarkers.add(createDefaultFurnitureSeedMarker(furniture.id));
+      }
       continue;
     }
 
-    if (!tvSeededGroupKeys.has(group.key)) {
-      if (!groupHasPersistedTv) {
-        const tvFurniture = createDefaultOfficeFurnitureForGroup(group.key, nextPersistedFurniture).filter(
-          (element) => element.type === "tv",
-        );
-        nextPersistedFurniture.push(...tvFurniture);
+    const backfillIds = new Set(getDefaultOfficeFurnitureBackfillIds(group.key));
+    for (const furniture of defaultFurniture) {
+      const marker = createDefaultFurnitureSeedMarker(furniture.id);
+      const hasPersistedFurniture = nextPersistedFurniture.some((element) => element.id === furniture.id);
+      if (hasPersistedFurniture) {
+        seededFurnitureMarkers.add(marker);
+        continue;
       }
-      tvSeededGroupKeys.add(group.key);
+
+      if (!backfillIds.has(furniture.id) || seededFurnitureMarkers.has(marker)) {
+        continue;
+      }
+
+      nextPersistedFurniture.push(furniture);
+      seededFurnitureMarkers.add(marker);
     }
   }
 
@@ -294,8 +323,9 @@ export function buildOfficeScene(input: {
   const deskScenes: OfficeDeskScene[] = [];
   const groupScenes: OfficeProjectGroupScene[] = [];
 
-  for (const group of input.groups) {
+  for (const group of visibleGroups) {
     const anchor = nextProjectGroupAnchors[group.key]!;
+    const isCollapsed = !expandedGroupKeys.has(group.key);
     const groupDeskInputs = desksByGroupKey.get(group.key) ?? [];
     const existingOffsets = groupDeskInputs
       .map((desk) => input.persistedState.deskOffsetsByThreadId[desk.threadId])
@@ -362,17 +392,25 @@ export function buildOfficeScene(input: {
         Math.min(-GROUP_FRAME_TOP_PADDING, minLocalY - GROUP_FRAME_TOP_PADDING),
     );
     const persistedGroupSize = input.persistedState.projectGroupSizesByKey[group.key];
-    const resolvedFrameSize = clampGroupFrameSize({
+    const expandedFrameSize = clampGroupFrameSize({
       width: Math.max(frameWidth, persistedGroupSize?.width ?? 0),
       height: Math.max(frameHeight, persistedGroupSize?.height ?? 0),
     });
-    nextProjectGroupSizesByKey[group.key] = resolvedFrameSize;
+    nextProjectGroupSizesByKey[group.key] = expandedFrameSize;
+    const resolvedFrameSize = isCollapsed
+      ? {
+          width: Math.max(GROUP_COLLAPSED_WIDTH, Math.min(expandedFrameSize.width, 460)),
+          height: GROUP_COLLAPSED_HEIGHT,
+        }
+      : expandedFrameSize;
 
     groupScenes.push({
       key: group.key,
       label: group.label,
       cwd: group.cwd,
+      projectRoot: group.projectRoot,
       accentColor: resolveOfficeGroupAccent(group.key, input.persistedState.groupAccentColorsByKey),
+      isCollapsed,
       anchor: {
         key: group.key,
         x: anchor.x,
@@ -393,7 +431,7 @@ export function buildOfficeScene(input: {
         },
       },
       deskThreadIds: group.threadIds,
-      congregationTargets: (resolvedFurniture.congregationTargetsByGroupKey[group.key] ?? []).map(
+      congregationTargets: (isCollapsed ? [] : resolvedFurniture.congregationTargetsByGroupKey[group.key] ?? []).map(
         (target) => ({
           id: target.id,
           furnitureId: target.furnitureId,
@@ -405,31 +443,40 @@ export function buildOfficeScene(input: {
     });
   }
 
+  const collapsedGroupKeySet = new Set(groupScenes.filter((group) => group.isCollapsed).map((group) => group.key));
+  const visibleDeskScenes = deskScenes.filter((desk) => !collapsedGroupKeySet.has(desk.groupKey));
+  const visibleLinkedFurniture = Object.entries(resolvedFurniture.linkedFurnitureByGroupKey).flatMap(
+    ([groupKey, elements]) => (collapsedGroupKeySet.has(groupKey) ? [] : elements),
+  );
+  const visibleFurniture = [...resolvedFurniture.floatingFurniture, ...visibleLinkedFurniture];
+
   const bounds = unionBounds([
     ...groupScenes.map((group) => elementBounds(group.element)),
-    ...deskScenes.map((desk) => elementBounds(desk.element)),
-    ...resolvedFurniture.allFurniture.map((element) => elementBounds(element)),
+    ...visibleDeskScenes.map((desk) => elementBounds(desk.element)),
+    ...visibleFurniture.map((element) => elementBounds(element)),
   ]);
 
   return {
     persistedState: {
-      version: 3,
+      version: 4,
       camera: { ...input.persistedState.camera },
       furniture: nextPersistedFurniture.map(clonePersistedFurniture),
       projectGroupAnchors: nextProjectGroupAnchors,
       projectGroupSizesByKey: nextProjectGroupSizesByKey,
       deskOffsetsByThreadId: nextDeskOffsetsByThreadId,
       groupAccentColorsByKey: { ...input.persistedState.groupAccentColorsByKey },
+      expandedGroupKeys: [...expandedGroupKeys],
+      hiddenGroupKeys: [...hiddenGroupKeys],
       adminDeskPosition: { ...input.persistedState.adminDeskPosition },
       defaultFurnitureSeededGroupKeys: [
         ...seededGroupKeys,
-        ...[...tvSeededGroupKeys].map((groupKey) => `${TV_FURNITURE_SEEDED_PREFIX}${groupKey}`),
+        ...seededFurnitureMarkers,
       ],
     },
     scene: {
       groups: groupScenes,
-      desks: deskScenes,
-      furniture: resolvedFurniture.allFurniture,
+      desks: visibleDeskScenes,
+      furniture: visibleFurniture,
       bounds,
     },
   };

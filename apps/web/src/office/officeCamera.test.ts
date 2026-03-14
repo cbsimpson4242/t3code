@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { clampZoom, fitCameraToBounds, screenToWorld, worldToScreen, zoomAtPoint } from "./officeCamera";
+import {
+  clampZoom,
+  fitCameraToBounds,
+  screenToWorld,
+  worldRectToScreenRect,
+  worldToScreen,
+  zoomAtPoint,
+} from "./officeCamera";
 
 describe("officeCamera", () => {
   it("clamps zoom into the supported range", () => {
@@ -51,5 +58,27 @@ describe("officeCamera", () => {
     expect(maxScreen.x).toBeCloseTo(900, 4);
     expect(minScreen.y).toBeCloseTo(100, 4);
     expect(maxScreen.y).toBeCloseTo(500, 4);
+  });
+
+  it("projects world rects into screen rects with device-pixel snapping", () => {
+    const screenRect = worldRectToScreenRect({
+      rect: {
+        x: 10,
+        y: 20,
+        width: 320,
+        height: 180,
+      },
+      camera: {
+        x: 5.25,
+        y: 7.75,
+        zoom: 0.85,
+      },
+      devicePixelRatio: 2,
+    });
+
+    expect(screenRect.x).toBe(14);
+    expect(screenRect.y).toBe(25);
+    expect(screenRect.width).toBe(272);
+    expect(screenRect.height).toBe(153);
   });
 });

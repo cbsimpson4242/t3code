@@ -31,6 +31,7 @@ export {
 interface OfficeThreadWindowProps {
   threadId: ThreadId;
   rect: OfficeThreadWindowRect;
+  displayRect?: OfficeThreadWindowRect | undefined;
   zoom: number;
   zIndex: number;
   isFocused: boolean;
@@ -45,7 +46,17 @@ interface OfficeThreadWindowProps {
   onOpenInMainWindow?: ((threadId: ThreadId) => void) | undefined;
 }
 
-function summarizeLastUserMessage(thread: Thread | null): string {
+interface OfficeThreadWindowPreviewProps {
+  threadId: ThreadId;
+  rect: OfficeThreadWindowRect;
+  zIndex: number;
+  accentColor: string;
+  projects: Project[];
+  threads: Thread[];
+  onFocus: () => void;
+}
+
+export function summarizeLastUserMessage(thread: Thread | null): string {
   if (!thread) {
     return "No user message yet";
   }
@@ -70,9 +81,74 @@ function summarizeLastUserMessage(thread: Thread | null): string {
   return "No user message yet";
 }
 
+export function OfficeThreadWindowPreview({
+  threadId,
+  rect,
+  zIndex,
+  accentColor,
+  projects,
+  threads,
+  onFocus,
+}: OfficeThreadWindowPreviewProps) {
+  const thread = useMemo(() => threads.find((entry) => entry.id === threadId) ?? null, [threadId, threads]);
+  const project = useMemo(
+    () => (thread ? projects.find((entry) => entry.id === thread.projectId) ?? null : null),
+    [projects, thread],
+  );
+  const lastUserMessageSummary = useMemo(() => summarizeLastUserMessage(thread), [thread]);
+
+  return (
+    <div
+      data-office-thread-window-preview={threadId}
+      className="pointer-events-auto absolute overflow-hidden rounded-[20px] border bg-background/95 shadow-2xl backdrop-blur-xl"
+      style={{
+        left: rect.x,
+        top: rect.y,
+        width: rect.width,
+        height: rect.height,
+        zIndex,
+        borderColor: `${accentColor}88`,
+        boxShadow: `0 18px 46px -24px ${accentColor}aa, 0 0 0 1px ${accentColor}30`,
+      }}
+      onPointerDown={onFocus}
+    >
+      <div
+        className="flex h-full min-h-0 flex-col border-b px-4 py-3"
+        style={{
+          borderColor: `${accentColor}40`,
+          background: `linear-gradient(180deg, ${accentColor}1c, rgba(15, 23, 42, 0.04))`,
+        }}
+      >
+        <div className="flex items-start gap-3">
+          <div className="mt-1 h-8 w-1 shrink-0 rounded-full" style={{ backgroundColor: accentColor }} aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-semibold text-foreground">{thread?.title ?? "New thread"}</div>
+            <div className="truncate text-xs text-muted-foreground">{project?.name ?? "Draft agent"}</div>
+            <div
+              className="mt-2 rounded-2xl border px-3 py-2 text-[11px] leading-4 shadow-sm"
+              style={{
+                borderColor: `${accentColor}42`,
+                backgroundColor: `${accentColor}10`,
+              }}
+              data-office-thread-last-user-message-preview={threadId}
+              title={lastUserMessageSummary}
+            >
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/75">
+                Last user message
+              </div>
+              <div className="line-clamp-2 text-foreground/90">{lastUserMessageSummary}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function OfficeThreadWindow({
   threadId,
   rect,
+  displayRect,
   zoom,
   zIndex,
   isFocused,
@@ -128,6 +204,7 @@ export default function OfficeThreadWindow({
   return (
     <OfficeWindowFrame
       rect={rect}
+      {...(displayRect ? { displayRect } : {})}
       zoom={zoom}
       zIndex={zIndex}
       isFocused={isFocused}

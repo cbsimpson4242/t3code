@@ -52,11 +52,6 @@ const FURNITURE_BLUEPRINTS: Record<OfficeFurnitureType, OfficeFurnitureBlueprint
     width: 96,
     height: 128,
   },
-  tv: {
-    type: "tv",
-    width: 132,
-    height: 90,
-  },
 };
 
 const FURNITURE_BASE_IDS: Record<OfficeFurnitureType, string> = {
@@ -65,7 +60,6 @@ const FURNITURE_BASE_IDS: Record<OfficeFurnitureType, string> = {
   chair: "chair",
   plant: "plant",
   coffeeBar: "coffee-bar",
-  tv: "tv",
 };
 
 const DEFAULT_LINKED_FURNITURE_OFFSETS = {
@@ -73,9 +67,39 @@ const DEFAULT_LINKED_FURNITURE_OFFSETS = {
   conferenceTable: { x: 118, y: 286 },
   plantLeft: { x: 26, y: 426 },
   plantRight: { x: 402, y: 426 },
-  coffeeBar: { x: 386, y: 166 },
-  tv: { x: 372, y: 44 },
 } as const satisfies Record<string, OfficePoint>;
+
+const DEFAULT_LINKED_FURNITURE_DESCRIPTORS = [
+  {
+    type: "conferenceTable",
+    suffix: DEFAULT_OFFICE_TABLE_ID,
+    offset: DEFAULT_LINKED_FURNITURE_OFFSETS.conferenceTable,
+    seedOnExistingGroups: false,
+  },
+  {
+    type: "waterCooler",
+    suffix: "water-cooler",
+    offset: DEFAULT_LINKED_FURNITURE_OFFSETS.waterCooler,
+    seedOnExistingGroups: false,
+  },
+  {
+    type: "plant",
+    suffix: "plant-left",
+    offset: DEFAULT_LINKED_FURNITURE_OFFSETS.plantLeft,
+    seedOnExistingGroups: false,
+  },
+  {
+    type: "plant",
+    suffix: "plant-right",
+    offset: DEFAULT_LINKED_FURNITURE_OFFSETS.plantRight,
+    seedOnExistingGroups: false,
+  },
+] as const satisfies ReadonlyArray<{
+  type: OfficeFurnitureType;
+  suffix: string;
+  offset: OfficePoint;
+  seedOnExistingGroups: boolean;
+}>;
 
 const LEGACY_DEFAULT_FURNITURE_IDS = new Set([
   "water-cooler",
@@ -91,7 +115,6 @@ const LEGACY_DEFAULT_FURNITURE_IDS = new Set([
   "plant-left",
   "plant-right",
   "coffee-bar",
-  "tv",
 ]);
 
 function cloneMetadata(metadata: OfficeElementMetadata | undefined): OfficeElementMetadata | undefined {
@@ -303,7 +326,6 @@ function createCongregationTargets(element: OfficeElement): OfficeCongregationTa
           y: centerY,
         },
       ];
-    case "tv":
     default:
       return [];
   }
@@ -394,20 +416,18 @@ export function createDefaultOfficeFurnitureForGroup(
         offset,
       },
       existingFurniture,
-      {
-        id: createGroupFurnitureId(groupKey, suffix),
-        ...(type === "tv" ? { metadata: { groupKey, role: "tv" } } : {}),
-      },
+      { id: createGroupFurnitureId(groupKey, suffix) },
     );
 
-  return [
-    linked("conferenceTable", DEFAULT_OFFICE_TABLE_ID, DEFAULT_LINKED_FURNITURE_OFFSETS.conferenceTable),
-    linked("waterCooler", "water-cooler", DEFAULT_LINKED_FURNITURE_OFFSETS.waterCooler),
-    linked("plant", "plant-left", DEFAULT_LINKED_FURNITURE_OFFSETS.plantLeft),
-    linked("plant", "plant-right", DEFAULT_LINKED_FURNITURE_OFFSETS.plantRight),
-    linked("coffeeBar", "coffee-bar", DEFAULT_LINKED_FURNITURE_OFFSETS.coffeeBar),
-    linked("tv", "tv", DEFAULT_LINKED_FURNITURE_OFFSETS.tv),
-  ];
+  return DEFAULT_LINKED_FURNITURE_DESCRIPTORS.map((descriptor) =>
+    linked(descriptor.type, descriptor.suffix, descriptor.offset),
+  );
+}
+
+export function getDefaultOfficeFurnitureBackfillIds(groupKey: string): string[] {
+  return DEFAULT_LINKED_FURNITURE_DESCRIPTORS.filter((descriptor) => descriptor.seedOnExistingGroups).map(
+    (descriptor) => createGroupFurnitureId(groupKey, descriptor.suffix),
+  );
 }
 
 export function resolveOfficeFurniture(input: {
@@ -656,12 +676,6 @@ export function getDefaultOfficeFurnitureFootprint() {
       GROUP_MIN_WIDTH,
       DEFAULT_LINKED_FURNITURE_OFFSETS.conferenceTable.x +
         FURNITURE_BLUEPRINTS.conferenceTable.width +
-        GROUP_DESK_LAYOUT_LEFT_PADDING,
-      DEFAULT_LINKED_FURNITURE_OFFSETS.coffeeBar.x +
-        FURNITURE_BLUEPRINTS.coffeeBar.width +
-        GROUP_DESK_LAYOUT_LEFT_PADDING,
-      DEFAULT_LINKED_FURNITURE_OFFSETS.tv.x +
-        FURNITURE_BLUEPRINTS.tv.width +
         GROUP_DESK_LAYOUT_LEFT_PADDING,
       DEFAULT_LINKED_FURNITURE_OFFSETS.plantRight.x +
         FURNITURE_BLUEPRINTS.plant.width +

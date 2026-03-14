@@ -45,16 +45,26 @@ describe("officeFurniture", () => {
 
     expect(placementsById.get("group:group-a:water-cooler")).toEqual({ x: 18, y: 184 });
     expect(placementsById.get("group:group-a:conference-table")).toEqual({ x: 118, y: 286 });
-    expect(placementsById.get("group:group-a:coffee-bar")).toEqual({ x: 386, y: 166 });
-    expect(placementsById.get("group:group-a:tv")).toEqual({ x: 372, y: 44 });
     expect(placementsById.get("group:group-a:plant-left")).toEqual({ x: 26, y: 426 });
     expect(placementsById.get("group:group-a:plant-right")).toEqual({ x: 402, y: 426 });
   });
 
-  it("includes the seeded TV in the default office footprint", () => {
+  it("uses the remaining seeded furniture for the default office footprint", () => {
     expect(getDefaultOfficeFurnitureFootprint()).toEqual({
-      minWidth: 522,
+      minWidth: 476,
       minHeight: 530,
+    });
+  });
+
+  it("still allows manually adding a coffee bar", () => {
+    const [coffeeBar] = createOfficeFurniture("coffeeBar", { x: 420, y: 260 }, []);
+
+    expect(coffeeBar).toMatchObject({
+      type: "coffeeBar",
+      placement: {
+        kind: "floating",
+        position: { x: 372, y: 196 },
+      },
     });
   });
 
@@ -133,7 +143,6 @@ describe("officeFurniture", () => {
 
     const targets = resolved.congregationTargetsByGroupKey["group-a"] ?? [];
     expect(targets.some((target) => target.furnitureType === "conferenceTable")).toBe(true);
-    expect(targets.some((target) => target.furnitureType === "coffeeBar")).toBe(true);
     expect(targets.some((target) => target.furnitureType === "waterCooler")).toBe(true);
     expect(targets.some((target) => target.furnitureType === "plant")).toBe(true);
   });

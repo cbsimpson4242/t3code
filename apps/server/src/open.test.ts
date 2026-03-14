@@ -5,8 +5,10 @@ import path from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 
 import {
+  buildSpawnInput,
   isCommandAvailable,
   launchDetached,
+  quoteWindowsShellArgument,
   resolveAvailableEditors,
   resolveEditorLaunch,
 } from "./open";
@@ -137,6 +139,26 @@ describe("launchDetached", () => {
       assert.equal(result._tag, "Failure");
     }),
   );
+});
+
+describe("windows spawn quoting", () => {
+  it("quotes Windows shell arguments with spaces so VS Code opens the target folder", () => {
+    assert.equal(quoteWindowsShellArgument("F:\\DEV Apps\\t3code"), "\"F:\\DEV Apps\\t3code\"");
+    assert.deepEqual(
+      buildSpawnInput(
+        {
+          command: "code",
+          args: ["F:\\DEV Apps\\t3code"],
+        },
+        "win32",
+      ),
+      {
+        command: 'code "F:\\DEV Apps\\t3code"',
+        args: [],
+        shell: true,
+      },
+    );
+  });
 });
 
 describe("isCommandAvailable", () => {

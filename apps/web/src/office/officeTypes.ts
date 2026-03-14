@@ -5,8 +5,7 @@ export type OfficeElementType =
   | "conferenceTable"
   | "chair"
   | "plant"
-  | "coffeeBar"
-  | "tv";
+  | "coffeeBar";
 
 export type OfficeFurnitureType = Exclude<OfficeElementType, "projectGroup" | "desk">;
 
@@ -80,13 +79,15 @@ export interface OfficePersistedFurniture {
 }
 
 export interface OfficePersistedState {
-  version: 3;
+  version: 4;
   camera: OfficeCameraState;
   furniture: OfficePersistedFurniture[];
   projectGroupAnchors: Record<string, OfficePoint>;
   projectGroupSizesByKey: Record<string, OfficeSize>;
   deskOffsetsByThreadId: Record<string, OfficePoint>;
   groupAccentColorsByKey: Record<string, string>;
+  expandedGroupKeys: string[];
+  hiddenGroupKeys: string[];
   adminDeskPosition: OfficePoint;
   defaultFurnitureSeededGroupKeys: string[];
 }
@@ -95,6 +96,7 @@ export interface OfficeProjectGroupInput {
   key: string;
   label: string;
   cwd: string | null;
+  projectRoot: string | null;
   threadIds: string[];
 }
 
@@ -122,7 +124,9 @@ export interface OfficeProjectGroupScene {
   key: string;
   label: string;
   cwd: string | null;
+  projectRoot: string | null;
   accentColor: string;
+  isCollapsed: boolean;
   anchor: OfficeProjectGroupAnchor;
   element: OfficeElement;
   deskThreadIds: string[];

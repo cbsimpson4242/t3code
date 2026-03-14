@@ -8,6 +8,8 @@ export const OFFICE_DRAG_THRESHOLD_PX = 4;
 
 export const GROUP_MIN_WIDTH = 280;
 export const GROUP_MIN_HEIGHT = 136;
+export const GROUP_COLLAPSED_WIDTH = 360;
+export const GROUP_COLLAPSED_HEIGHT = 54;
 export const GROUP_FRAME_TOP_PADDING = 40;
 export const GROUP_FRAME_SIDE_PADDING = 28;
 export const GROUP_FRAME_BOTTOM_PADDING = 30;
@@ -33,7 +35,7 @@ export const COFFEE_BAR_SNACK_IDS = [
 
 export function createDefaultOfficePersistedState(): OfficePersistedState {
   return {
-    version: 3,
+    version: 4,
     camera: {
       x: 0,
       y: 0,
@@ -44,6 +46,8 @@ export function createDefaultOfficePersistedState(): OfficePersistedState {
     projectGroupSizesByKey: {},
     deskOffsetsByThreadId: {},
     groupAccentColorsByKey: {},
+    expandedGroupKeys: [],
+    hiddenGroupKeys: [],
     adminDeskPosition: { ...DEFAULT_ADMIN_DESK_POSITION },
     defaultFurnitureSeededGroupKeys: [],
   };

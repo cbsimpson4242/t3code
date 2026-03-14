@@ -69,6 +69,13 @@ function makeActivity(overrides: {
   };
 }
 
+function createExpandedOfficePersistedState() {
+  return {
+    ...createDefaultOfficePersistedState(),
+    expandedGroupKeys: ["group-a", "group-b", "group-c"],
+  };
+}
+
 describe("officeLayout", () => {
   it("preserves existing group anchors and appends new groups without reflow", () => {
     const projects = [makeProject("project-1", "project-a"), makeProject("project-2", "project-b")];
@@ -79,7 +86,7 @@ describe("officeLayout", () => {
     const inputs = deriveOfficeInputs(projects, threads);
     const firstBuild = buildOfficeScene({
       ...inputs,
-      persistedState: createDefaultOfficePersistedState(),
+      persistedState: createExpandedOfficePersistedState(),
     });
 
     const persistedState = {
@@ -119,7 +126,7 @@ describe("officeLayout", () => {
     const inputs = deriveOfficeInputs(projects, threads);
     const firstBuild = buildOfficeScene({
       ...inputs,
-      persistedState: createDefaultOfficePersistedState(),
+      persistedState: createExpandedOfficePersistedState(),
     });
     const beforeDeskPositions = new Map(
       firstBuild.scene.desks.map((desk) => [desk.threadId, { x: desk.element.x, y: desk.element.y }] as const),
@@ -155,7 +162,7 @@ describe("officeLayout", () => {
     const inputs = deriveOfficeInputs(projects, threads);
     const firstBuild = buildOfficeScene({
       ...inputs,
-      persistedState: createDefaultOfficePersistedState(),
+      persistedState: createExpandedOfficePersistedState(),
     });
     const beforeDeskPositions = new Map(
       firstBuild.scene.desks.map((desk) => [desk.threadId, { x: desk.element.x, y: desk.element.y }] as const),
@@ -193,41 +200,49 @@ describe("officeLayout", () => {
 
     const build = buildOfficeScene({
       ...deriveOfficeInputs(projects, threads),
-      persistedState: createDefaultOfficePersistedState(),
+      persistedState: createExpandedOfficePersistedState(),
     });
 
-    expect(build.persistedState.defaultFurnitureSeededGroupKeys.toSorted()).toEqual([
-      "group-a",
-      "group-b",
-      "tv:group-a",
-      "tv:group-b",
-    ]);
-    expect(build.persistedState.furniture.filter((element) => element.placement.kind === "groupLinked")).toHaveLength(12);
+    expect(build.persistedState.defaultFurnitureSeededGroupKeys).toEqual(
+      expect.arrayContaining([
+        "group-a",
+        "group-b",
+        "default-furniture:group:group-a:conference-table",
+        "default-furniture:group:group-a:water-cooler",
+        "default-furniture:group:group-a:plant-left",
+        "default-furniture:group:group-a:plant-right",
+        "default-furniture:group:group-b:conference-table",
+        "default-furniture:group:group-b:water-cooler",
+        "default-furniture:group:group-b:plant-left",
+        "default-furniture:group:group-b:plant-right",
+      ]),
+    );
+    expect(build.persistedState.furniture.filter((element) => element.placement.kind === "groupLinked")).toHaveLength(8);
     expect(build.scene.groups.every((group) => group.congregationTargets.length > 0)).toBe(true);
   });
 
-  it("backfills newly added default office furniture for already-seeded groups", () => {
+  it("does not re-add removed TV and rack furniture for already-seeded groups", () => {
     const projects = [makeProject("project-1", "project-a")];
     const threads = [makeThread({ id: "thread-1", projectId: "project-1", title: "Thread 1", worktreePath: "group-a" })];
 
     const firstBuild = buildOfficeScene({
       ...deriveOfficeInputs(projects, threads),
-      persistedState: createDefaultOfficePersistedState(),
+      persistedState: createExpandedOfficePersistedState(),
     });
 
     const nextBuild = buildOfficeScene({
       ...deriveOfficeInputs(projects, threads),
       persistedState: {
         ...firstBuild.persistedState,
-        furniture: firstBuild.persistedState.furniture.filter((element) => element.id !== "group:group-a:tv"),
+        furniture: firstBuild.persistedState.furniture,
         defaultFurnitureSeededGroupKeys: ["group-a"],
       },
     });
 
-    expect(nextBuild.persistedState.furniture.some((element) => element.id === "group:group-a:tv")).toBe(
-      true,
-    );
-    expect(nextBuild.scene.furniture.some((element) => element.id === "group:group-a:tv")).toBe(true);
+    expect(nextBuild.persistedState.furniture.some((element) => element.id === "group:group-a:tv")).toBe(false);
+    expect(nextBuild.persistedState.furniture.some((element) => element.id === "group:group-a:server-rack")).toBe(false);
+    expect(nextBuild.scene.furniture.some((element) => element.id === "group:group-a:tv")).toBe(false);
+    expect(nextBuild.scene.furniture.some((element) => element.id === "group:group-a:server-rack")).toBe(false);
   });
 
   it("moves linked furniture automatically when the group anchor changes", () => {
@@ -236,7 +251,7 @@ describe("officeLayout", () => {
     const inputs = deriveOfficeInputs(projects, threads);
     const firstBuild = buildOfficeScene({
       ...inputs,
-      persistedState: createDefaultOfficePersistedState(),
+      persistedState: createExpandedOfficePersistedState(),
     });
     const tableBefore = firstBuild.scene.furniture.find((element) => element.id === "group:group-a:conference-table");
     if (!tableBefore) {
@@ -272,7 +287,7 @@ describe("officeLayout", () => {
 
     const build = buildOfficeScene({
       ...deriveOfficeInputs(projects, threads),
-      persistedState: createDefaultOfficePersistedState(),
+      persistedState: createExpandedOfficePersistedState(),
     });
 
     expect(build.persistedState.deskOffsetsByThreadId).toMatchObject({
@@ -288,7 +303,7 @@ describe("officeLayout", () => {
 
     const build = buildOfficeScene({
       ...deriveOfficeInputs(projects, threads),
-      persistedState: createDefaultOfficePersistedState(),
+      persistedState: createExpandedOfficePersistedState(),
     });
     const group = build.scene.groups[0]!;
     const groupFurniture = build.scene.furniture.filter((element) => element.id.startsWith("group:group-a:"));
@@ -310,7 +325,7 @@ describe("officeLayout", () => {
 
     const build = buildOfficeScene({
       ...deriveOfficeInputs(projects, threads),
-      persistedState: createDefaultOfficePersistedState(),
+      persistedState: createExpandedOfficePersistedState(),
     });
     const groupA = build.scene.groups.find((group) => group.key === "group-a");
     const groupB = build.scene.groups.find((group) => group.key === "group-b");
@@ -330,7 +345,7 @@ describe("officeLayout", () => {
 
     const build = buildOfficeScene({
       ...deriveOfficeInputs(projects, threads),
-      persistedState: createDefaultOfficePersistedState(),
+      persistedState: createExpandedOfficePersistedState(),
     });
     const groupA = build.scene.groups.find((group) => group.key === "group-a")!;
     const groupB = build.scene.groups.find((group) => group.key === "group-b")!;
@@ -344,7 +359,7 @@ describe("officeLayout", () => {
     const threads = [makeThread({ id: "thread-1", projectId: "project-1", title: "Thread 1", worktreePath: "group-a" })];
     const firstBuild = buildOfficeScene({
       ...deriveOfficeInputs(projects, threads),
-      persistedState: createDefaultOfficePersistedState(),
+      persistedState: createExpandedOfficePersistedState(),
     });
 
     const nextBuild = buildOfficeScene({
@@ -500,7 +515,7 @@ describe("officeLayout", () => {
       groups: overriddenInputs.groups,
       desks: overriddenInputs.desks,
       persistedState: {
-        ...createDefaultOfficePersistedState(),
+        ...createExpandedOfficePersistedState(),
         groupAccentColorsByKey: {
           "group-a": "#06b6d4",
         },

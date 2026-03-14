@@ -127,6 +127,35 @@ function resolvePathDelimiter(platform: NodeJS.Platform): string {
   return platform === "win32" ? ";" : ":";
 }
 
+export function quoteWindowsShellArgument(value: string): string {
+  if (value.length === 0) {
+    return '""';
+  }
+  if (!/[ \t"]/u.test(value)) {
+    return value;
+  }
+  return `"${value.replace(/(\\*)"/g, "$1$1\\\"").replace(/(\\+)$/g, "$1$1")}"`;
+}
+
+export function buildSpawnInput(
+  launch: EditorLaunch,
+  platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[]; shell: boolean } {
+  if (platform !== "win32") {
+    return {
+      command: launch.command,
+      args: [...launch.args],
+      shell: false,
+    };
+  }
+
+  return {
+    command: [launch.command, ...launch.args].map(quoteWindowsShellArgument).join(" "),
+    args: [],
+    shell: true,
+  };
+}
+
 export function isCommandAvailable(
   command: string,
   options: CommandAvailabilityOptions = {},
@@ -228,14 +257,15 @@ export const launchDetached = (launch: EditorLaunch) =>
     if (!isCommandAvailable(launch.command)) {
       return yield* new OpenError({ message: `Editor command not found: ${launch.command}` });
     }
+    const spawnInput = buildSpawnInput(launch);
 
     yield* Effect.callback<void, OpenError>((resume) => {
       let child;
       try {
-        child = spawn(launch.command, [...launch.args], {
+        child = spawn(spawnInput.command, spawnInput.args, {
           detached: true,
           stdio: "ignore",
-          shell: process.platform === "win32",
+          shell: spawnInput.shell,
         });
       } catch (error) {
         return resume(

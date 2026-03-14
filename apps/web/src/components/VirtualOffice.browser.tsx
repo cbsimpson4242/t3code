@@ -1,21 +1,18 @@
 import "../index.css";
 
-import { EventId, MessageId, ProjectId, RuntimeSessionId, ThreadId, TurnId } from "@t3tools/contracts";
+import { EventId, MessageId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { useComposerDraftStore } from "../composerDraftStore";
 import { OFFICE_LAYOUT_STORAGE_KEY, createDefaultOfficePersistedState } from "../office/officeDefaults";
-import { usePreviewStore } from "../previewStore";
 import { useStore } from "../store";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Project, type Thread } from "../types";
 import {
-  getOfficeBrowserWindowDefaultSize,
   getOfficeAdminWindowDefaultSize,
   getOfficeThreadWindowDefaultSize,
 } from "./OfficeThreadWindow";
-import { getOfficeVsCodeWindowDefaultSize } from "./OfficeVsCodeWindow";
 import VirtualOffice from "./VirtualOffice";
 
 vi.mock("~/components/ChatView", async () => {
@@ -77,28 +74,6 @@ function makeUserMessage(id: string, text: string): Thread["messages"][number] {
     createdAt: "2026-03-10T00:00:00.000Z",
     streaming: false,
   };
-}
-
-function makePreview(input: {
-  id: string;
-  threadId: string;
-  cwd?: string;
-  url: string;
-  normalizedUrl?: string;
-  status?: "live" | "unavailable";
-  updatedAt?: string;
-}) {
-  return {
-    id: RuntimeSessionId.makeUnsafe(input.id),
-    threadId: ThreadId.makeUnsafe(input.threadId),
-    terminalId: "main",
-    cwd: input.cwd ?? `/repo/${input.threadId}`,
-    url: input.url,
-    normalizedUrl: input.normalizedUrl ?? input.url,
-    status: input.status ?? "live",
-    detectedAt: "2026-03-13T10:00:00.000Z",
-    updatedAt: input.updatedAt ?? "2026-03-13T10:00:00.000Z",
-  } as const;
 }
 
 function seedOfficeStore() {
@@ -278,44 +253,6 @@ async function dragSelector(selector: string, delta: { x: number; y: number }) {
   await waitForOfficeLayout();
 }
 
-async function dragBrowserWindow(groupKey: string, delta: { x: number; y: number }) {
-  const window = getBrowserWindow(groupKey);
-  const header = window.firstElementChild;
-  if (!(header instanceof HTMLElement)) {
-    throw new Error(`Missing browser window header for ${groupKey}`);
-  }
-  const rect = header.getBoundingClientRect();
-  dispatchPointerSequence(header, {
-    pointerId: 11,
-    button: 0,
-    buttons: 1,
-    startX: rect.left + rect.width / 2,
-    startY: rect.top + rect.height / 2,
-    endX: rect.left + rect.width / 2 + delta.x,
-    endY: rect.top + rect.height / 2 + delta.y,
-  });
-  await waitForOfficeLayout();
-}
-
-async function dragVsCodeWindow(groupKey: string, delta: { x: number; y: number }) {
-  const window = getVsCodeWindow(groupKey);
-  const header = window.firstElementChild;
-  if (!(header instanceof HTMLElement)) {
-    throw new Error(`Missing VS Code window header for ${groupKey}`);
-  }
-  const rect = header.getBoundingClientRect();
-  dispatchPointerSequence(header, {
-    pointerId: 12,
-    button: 0,
-    buttons: 1,
-    startX: rect.left + rect.width / 2,
-    startY: rect.top + rect.height / 2,
-    endX: rect.left + rect.width / 2 + delta.x,
-    endY: rect.top + rect.height / 2 + delta.y,
-  });
-  await waitForOfficeLayout();
-}
-
 async function clickSelector(selector: string) {
   const element = getRequiredElement<HTMLElement>(selector);
   const rect = element.getBoundingClientRect();
@@ -477,22 +414,6 @@ function getAdminWindow(): HTMLElement {
   return element;
 }
 
-function getBrowserWindow(groupKey: string): HTMLElement {
-  const element = document.querySelector<HTMLElement>(`[data-office-browser-window='${groupKey}']`);
-  if (!element) {
-    throw new Error(`Missing office browser window: ${groupKey}`);
-  }
-  return element;
-}
-
-function getVsCodeWindow(groupKey: string): HTMLElement {
-  const element = document.querySelector<HTMLElement>(`[data-office-vscode-window='${groupKey}']`);
-  if (!element) {
-    throw new Error(`Missing office VS Code window: ${groupKey}`);
-  }
-  return element;
-}
-
 function getOfficeNotification(threadId: string, kind: "attention" | "success"): HTMLElement {
   const element = document.querySelector<HTMLElement>(
     `[data-office-notification-thread='${threadId}'][data-office-notification-kind='${kind}']`,
@@ -546,7 +467,6 @@ describe("VirtualOffice interactions", () => {
     document.body.innerHTML = "";
     seedOfficeStore();
     seedExpandedOfficeLayout();
-    usePreviewStore.getState().clear();
     nativeApiPickFolder.mockReset();
     nativeApiPickFolder.mockResolvedValue(null);
     nativeApiConfirm.mockReset();
@@ -563,7 +483,6 @@ describe("VirtualOffice interactions", () => {
     document.body.innerHTML = "";
     Reflect.deleteProperty(window, "nativeApi");
     Reflect.deleteProperty(window, "desktopBridge");
-    usePreviewStore.getState().clear();
   });
 
   it("zooms with the wheel and pans with middle mouse drag", async () => {
@@ -595,7 +514,7 @@ describe("VirtualOffice interactions", () => {
     }
   });
 
-  it("shows large office labels when zoomed out", async () => {
+  it("shows usable office menus when zoomed out", async () => {
     const mounted = await mountOffice();
     try {
       const viewport = getRequiredElement<HTMLElement>("[data-testid='virtual-office-viewport']");
@@ -613,11 +532,16 @@ describe("VirtualOffice interactions", () => {
         await waitForOfficeLayout();
       }
 
-      expect(getRequiredElement<HTMLElement>("[data-office-far-label='group-a']").textContent).toContain(
-        "group-a",
-      );
-      expect(getRequiredElement<HTMLElement>("[data-office-far-label='group-b']").textContent).toContain(
-        "group-b",
+      expect(getRequiredElement<HTMLElement>("[data-office-far-menu='group-a']").textContent).toContain("group-a");
+      expect(getRequiredElement<HTMLElement>("[data-office-far-menu='group-b']").textContent).toContain("group-b");
+
+      getRequiredElement<HTMLButtonElement>(
+        "[data-office-far-menu='group-a'] [data-office-group-collapse='group-a']",
+      ).click();
+      await waitForOfficeLayout();
+
+      expect(getRequiredElement<HTMLElement>("[data-office-group='group-a']").dataset.officeGroupCollapsed).toBe(
+        "true",
       );
     } finally {
       await mounted.cleanup();
@@ -1678,302 +1602,6 @@ describe("VirtualOffice interactions", () => {
       expect(
         getRequiredElement<HTMLElement>(`[data-office-desk='${draftThread.threadId}']`).textContent,
       ).toContain("Renamed agent");
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("renders a seeded TV for each office group", async () => {
-    const mounted = await mountOffice();
-    try {
-      expect(document.querySelector("[data-office-tv='group-a']")).toBeTruthy();
-      expect(document.querySelector("[data-office-tv='group-b']")).toBeTruthy();
-      expect(document.querySelector("[data-office-server-rack='group-a']")).toBeTruthy();
-      expect(document.querySelector("[data-office-server-rack='group-b']")).toBeTruthy();
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("opens a linked VS Code window from the server rack, reuses it while open, and relaunches explicitly", async () => {
-    window.desktopBridge = {} as never;
-
-    const mounted = await mountOffice();
-    try {
-      await clickSelector("[data-office-server-rack='group-a']");
-
-      const vsCodeWindow = getVsCodeWindow("group-a");
-      expectWindowToUseSize(vsCodeWindow, getOfficeVsCodeWindowDefaultSize());
-      expect(vsCodeWindow.textContent).toContain("group-a VS Code");
-      expect(vsCodeWindow.textContent).toContain("group-a");
-      expect(document.querySelector("[data-office-vscode-link='group-a']")).toBeTruthy();
-      expect(nativeApiOpenInEditor).toHaveBeenCalledTimes(1);
-      expect(nativeApiOpenInEditor).toHaveBeenLastCalledWith("/repo/alpha", "vscode");
-
-      await clickSelector("[data-office-server-rack='group-a']");
-      expect(document.querySelectorAll("[data-office-vscode-window='group-a']")).toHaveLength(1);
-      expect(nativeApiOpenInEditor).toHaveBeenCalledTimes(1);
-
-      const reopenButton = [...getVsCodeWindow("group-a").querySelectorAll<HTMLButtonElement>("button")].find(
-        (entry) => entry.textContent?.trim() === "Open in VS Code again",
-      );
-      if (!reopenButton) {
-        throw new Error("Missing VS Code reopen button");
-      }
-      reopenButton.click();
-      await waitForOfficeLayout();
-
-      expect(nativeApiOpenInEditor).toHaveBeenCalledTimes(2);
-      expect(nativeApiOpenInEditor).toHaveBeenLastCalledWith("/repo/alpha", "vscode");
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("reuses the VS Code window rect after closing and reopening from the same rack", async () => {
-    window.desktopBridge = {} as never;
-
-    const mounted = await mountOffice();
-    try {
-      await clickSelector("[data-office-server-rack='group-a']");
-      await dragVsCodeWindow("group-a", { x: 140, y: 70 });
-      const movedLeft = getVsCodeWindow("group-a").parentElement?.style.left;
-      const movedTop = getVsCodeWindow("group-a").parentElement?.style.top;
-
-      const closeButton = getVsCodeWindow("group-a").querySelector<HTMLButtonElement>(
-        "button[aria-label='Close VS Code office window']",
-      );
-      if (!closeButton) {
-        throw new Error("Missing VS Code close button");
-      }
-      closeButton.click();
-      await waitForOfficeLayout();
-
-      await clickSelector("[data-office-server-rack='group-a']");
-      expect(getVsCodeWindow("group-a").parentElement?.style.left).toBe(movedLeft);
-      expect(getVsCodeWindow("group-a").parentElement?.style.top).toBe(movedTop);
-      expect(nativeApiOpenInEditor).toHaveBeenCalledTimes(2);
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("tracks one VS Code office window per workspace group", async () => {
-    window.desktopBridge = {} as never;
-
-    const mounted = await mountOffice();
-    try {
-      await clickSelector("[data-office-server-rack='group-a']");
-      await clickSelector("[data-office-server-rack='group-b']");
-
-      expect(document.querySelectorAll("[data-office-vscode-window='group-a']")).toHaveLength(1);
-      expect(document.querySelectorAll("[data-office-vscode-window='group-b']")).toHaveLength(1);
-      expect(nativeApiOpenInEditor).toHaveBeenNthCalledWith(1, "/repo/alpha", "vscode");
-      expect(nativeApiOpenInEditor).toHaveBeenNthCalledWith(2, "/repo/beta", "vscode");
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("shows a desktop-only message for the rack in browser mode without launching VS Code", async () => {
-    const mounted = await mountOffice();
-    try {
-      await clickSelector("[data-office-server-rack='group-a']");
-
-      const vsCodeWindow = getVsCodeWindow("group-a");
-      expect(vsCodeWindow.textContent).toContain("VS Code unavailable here");
-      expect(vsCodeWindow.textContent).toContain("desktop app");
-      expect(nativeApiOpenInEditor).not.toHaveBeenCalled();
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("shows a missing-path message when a rack office has no workspace path", async () => {
-    useStore.setState({
-      projects: [makeProject("project-1", "alpha")],
-      threads: [
-        makeThread({
-          id: "thread-missing",
-          projectId: "missing-project",
-          title: "Missing path",
-          worktreePath: null,
-        }),
-      ],
-    });
-    window.desktopBridge = {} as never;
-
-    const mounted = await mountOffice();
-    try {
-      await clickSelector("[data-office-server-rack='project:missing-project']");
-
-      const vsCodeWindow = getVsCodeWindow("project:missing-project");
-      expect(vsCodeWindow.textContent).toContain("No workspace path available");
-      expect(vsCodeWindow.textContent).toContain("nothing to open in VS Code yet");
-      expect(nativeApiOpenInEditor).not.toHaveBeenCalled();
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("opens an office browser popup from the TV and reuses its rect on reopen", async () => {
-    usePreviewStore.getState().setSnapshot({
-      previews: [
-        makePreview({
-          id: "preview-a",
-          threadId: "thread-a",
-          cwd: "group-a",
-          url: "http://127.0.0.1:3000/",
-        }),
-      ],
-    });
-
-    const mounted = await mountOffice();
-    try {
-      await clickSelector("[data-office-tv='group-a']");
-
-      const browserWindow = getBrowserWindow("group-a");
-      expectWindowToUseSize(browserWindow, getOfficeBrowserWindowDefaultSize());
-      expect(
-        getRequiredElement<HTMLIFrameElement>("[data-office-browser-iframe='group-a']").getAttribute("src"),
-      ).toBe("http://127.0.0.1:3000/");
-
-      await dragBrowserWindow("group-a", { x: 120, y: 64 });
-      const movedLeft = getBrowserWindow("group-a").parentElement?.style.left;
-      const movedTop = getBrowserWindow("group-a").parentElement?.style.top;
-
-      const closeButton = getBrowserWindow("group-a").querySelector<HTMLButtonElement>(
-        "button[aria-label='Close office browser window']",
-      );
-      if (!closeButton) {
-        throw new Error("Missing browser close button");
-      }
-      closeButton.click();
-      await waitForOfficeLayout();
-
-      await clickSelector("[data-office-tv='group-a']");
-      expect(getBrowserWindow("group-a").parentElement?.style.left).toBe(movedLeft);
-      expect(getBrowserWindow("group-a").parentElement?.style.top).toBe(movedTop);
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("opens a chooser when an office has multiple live previews", async () => {
-    usePreviewStore.getState().setSnapshot({
-      previews: [
-        makePreview({
-          id: "preview-a",
-          threadId: "thread-a",
-          cwd: "group-a",
-          url: "http://127.0.0.1:3000/",
-        }),
-        makePreview({
-          id: "preview-b",
-          threadId: "thread-b",
-          cwd: "group-a",
-          url: "http://127.0.0.1:4173/",
-          updatedAt: "2026-03-13T10:05:00.000Z",
-        }),
-      ],
-    });
-
-    const mounted = await mountOffice();
-    try {
-      await clickSelector("[data-office-tv='group-a']");
-
-      expect(document.querySelector("[data-office-browser-iframe='group-a']")).toBeNull();
-      expect(document.querySelectorAll("[data-office-browser-preview-option]").length).toBe(2);
-
-      await clickSelector("[data-office-browser-preview-option='preview-b']");
-      expect(
-        getRequiredElement<HTMLIFrameElement>("[data-office-browser-iframe='group-a']").getAttribute("src"),
-      ).toBe("http://127.0.0.1:4173/");
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("shows a waiting state and upgrades live when a preview appears later", async () => {
-    const mounted = await mountOffice();
-    try {
-      await clickSelector("[data-office-tv='group-b']");
-      expect(getBrowserWindow("group-b").textContent).toContain("No preview detected yet");
-
-      usePreviewStore.getState().setSnapshot({
-        previews: [
-          makePreview({
-            id: "preview-c",
-            threadId: "thread-c",
-            cwd: "group-b",
-            url: "http://127.0.0.1:8080/",
-          }),
-        ],
-      });
-      await waitForOfficeLayout();
-
-      expect(
-        getRequiredElement<HTMLIFrameElement>("[data-office-browser-iframe='group-b']").getAttribute("src"),
-      ).toBe("http://127.0.0.1:8080/");
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("keeps the browser window open and shows an offline state when the selected preview disappears", async () => {
-    usePreviewStore.getState().setSnapshot({
-      previews: [
-        makePreview({
-          id: "preview-a",
-          threadId: "thread-a",
-          cwd: "group-a",
-          url: "http://127.0.0.1:3000/",
-        }),
-      ],
-    });
-
-    const mounted = await mountOffice();
-    try {
-      await clickSelector("[data-office-tv='group-a']");
-      expect(document.querySelector("[data-office-browser-iframe='group-a']")).toBeTruthy();
-
-      usePreviewStore.getState().setSnapshot({
-        previews: [
-          makePreview({
-            id: "preview-a",
-            threadId: "thread-a",
-            cwd: "group-a",
-            url: "http://127.0.0.1:3000/",
-            status: "unavailable",
-            updatedAt: "2026-03-13T10:04:00.000Z",
-          }),
-        ],
-      });
-      await waitForOfficeLayout();
-
-      expect(document.querySelector("[data-office-browser-iframe='group-a']")).toBeNull();
-      expect(getBrowserWindow("group-a").textContent).toContain("Preview offline");
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("renders a tether between the TV and the office browser popup", async () => {
-    usePreviewStore.getState().setSnapshot({
-      previews: [
-        makePreview({
-          id: "preview-a",
-          threadId: "thread-a",
-          cwd: "group-a",
-          url: "http://127.0.0.1:3000/",
-        }),
-      ],
-    });
-
-    const mounted = await mountOffice();
-    try {
-      await clickSelector("[data-office-tv='group-a']");
-      expect(document.querySelector("[data-office-browser-link='group-a']")).toBeTruthy();
     } finally {
       await mounted.cleanup();
     }

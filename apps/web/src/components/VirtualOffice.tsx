@@ -6,6 +6,7 @@ import {
   CircleCheckIcon,
   CoffeeIcon,
   FolderIcon,
+  MonitorIcon,
   MoreHorizontalIcon,
   PlusIcon,
   RotateCcwIcon,
@@ -103,8 +104,6 @@ const OFFICE_MINIMAP_PADDING = 14;
 const OFFICE_MINIMAP_HEADER_HEIGHT = 30;
 const OFFICE_VIEWPORT_POINTER_BLOCK_SELECTOR = [
   "[data-office-thread-window]",
-  "[data-office-browser-window]",
-  "[data-office-vscode-window]",
   "[data-office-admin-window]",
   "[data-office-toolbar]",
   "[data-office-minimap]",
@@ -121,8 +120,6 @@ const OFFICE_VIEWPORT_POINTER_BLOCK_SELECTOR = [
 ].join(", ");
 const OFFICE_VIEWPORT_CONTEXT_MENU_BLOCK_SELECTOR = [
   "[data-office-thread-window]",
-  "[data-office-browser-window]",
-  "[data-office-vscode-window]",
   "[data-office-admin-window]",
   "[data-office-toolbar]",
   "[data-office-minimap]",
@@ -224,7 +221,16 @@ interface OpenOfficeThreadWindow {
 type OfficeNotificationKind = "success" | "attention";
 
 type OfficeScreenRect = OfficePoint & OfficeSize;
-type OfficeSceneGroup = ReturnType<typeof buildOfficeScene>["groups"][number];
+type OfficeSceneGroup = {
+  key: string;
+  label: string;
+  cwd: string | null;
+  accentColor: string;
+  isCollapsed: boolean;
+  anchor: OfficePoint;
+  deskThreadIds: string[];
+  element: OfficeElement & OfficePoint & OfficeSize;
+};
 
 interface GroupSelectionState {
   pointerId: number;
@@ -505,9 +511,9 @@ function ProjectOfficeIcon({ cwd }: { cwd: string | null }) {
 function OfficeGroupMenu(props: {
   group: OfficeSceneGroup;
   groupAccentColorsByKey: OfficePersistedState["groupAccentColorsByKey"];
-  mergedThreads: Thread[];
   isFarMenu?: boolean;
   scale?: number;
+  style?: React.CSSProperties;
   onCreate: (group: OfficeSceneGroup) => void;
   onToggleCollapsed: (groupKey: string) => void;
   onDelete: (groupKey: string) => void;
@@ -516,9 +522,9 @@ function OfficeGroupMenu(props: {
   const {
     group,
     groupAccentColorsByKey,
-    mergedThreads,
     isFarMenu = false,
     scale = 1,
+    style,
     onCreate,
     onToggleCollapsed,
     onDelete,
@@ -558,6 +564,7 @@ function OfficeGroupMenu(props: {
           : undefined,
         transform: isFarMenu ? `translate(-50%, -50%) scale(${scale})` : undefined,
         transformOrigin: "center",
+        ...style,
       }}
       onPointerDown={(event) => {
         event.stopPropagation();
@@ -1074,58 +1081,6 @@ export default function VirtualOffice({
   }, [scene.groups]);
 
   useEffect(() => {
-    setOpenBrowserWindows((current) => {
-      let changed = false;
-      const next = current.map((windowState) => {
-        const previews = previewsByGroupKey[windowState.groupKey] ?? [];
-        const livePreviews = previews.filter((preview) => preview.status === "live");
-        const selectedPreviewExists =
-          windowState.selectedPreviewId !== null &&
-          previews.some((preview) => preview.id === windowState.selectedPreviewId);
-
-        if ((windowState.selectedPreviewId === null || !selectedPreviewExists) && livePreviews.length === 1) {
-          const previewId = livePreviews[0]!.id;
-          if (windowState.selectedPreviewId === previewId && !windowState.showChooser) {
-            return windowState;
-          }
-          changed = true;
-          return {
-            ...windowState,
-            selectedPreviewId: previewId,
-            showChooser: false,
-          };
-        }
-
-        if (windowState.selectedPreviewId === null || !selectedPreviewExists) {
-          if (livePreviews.length > 1) {
-            if (windowState.selectedPreviewId === null && windowState.showChooser) {
-              return windowState;
-            }
-            changed = true;
-            return {
-              ...windowState,
-              selectedPreviewId: null,
-              showChooser: true,
-            };
-          }
-
-          if (windowState.selectedPreviewId !== null || windowState.showChooser) {
-            changed = true;
-            return {
-              ...windowState,
-              selectedPreviewId: null,
-              showChooser: false,
-            };
-          }
-        }
-
-        return windowState;
-      });
-      return changed ? next : current;
-    });
-  }, [previewsByGroupKey]);
-
-  useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
 
@@ -1356,15 +1311,8 @@ export default function VirtualOffice({
       setSelectedGroupKeys((current) => current.filter((key) => key !== groupKey));
       setHoveredBotId((current) => (current && threadIds.has(current) ? null : current));
       setOpenWindows((current) => current.filter((windowState) => !threadIds.has(String(windowState.threadId))));
-      setOpenBrowserWindows((current) => current.filter((windowState) => windowState.groupKey !== groupKey));
-      setOpenVsCodeWindows((current) => current.filter((windowState) => windowState.groupKey !== groupKey));
       setWindowStackOrder((current) =>
-        current.filter((token) => {
-          if (token === `browser:${groupKey}` || token === `vscode:${groupKey}`) {
-            return false;
-          }
-          return !(token.startsWith("thread:") && threadIds.has(token.slice("thread:".length)));
-        }),
+        current.filter((token) => !(token.startsWith("thread:") && threadIds.has(token.slice("thread:".length)))),
       );
       setOfficeState((current) => {
         const nextProjectGroupAnchors = { ...current.projectGroupAnchors };
@@ -1495,20 +1443,6 @@ export default function VirtualOffice({
         }),
       ),
     [camera, deskByThreadId, openWindows],
-  );
-  const projectedBrowserWindowRects = useMemo(
-    () =>
-      new Map(
-        openBrowserWindows.map((windowState) => [windowState.groupKey, projectWindowRect(windowState.rect)] as const),
-      ),
-    [openBrowserWindows, projectWindowRect],
-  );
-  const projectedVsCodeWindowRects = useMemo(
-    () =>
-      new Map(
-        openVsCodeWindows.map((windowState) => [windowState.groupKey, projectWindowRect(windowState.rect)] as const),
-      ),
-    [openVsCodeWindows, projectWindowRect],
   );
   const projectedAdminWindowRect = useMemo(
     () =>
@@ -1836,31 +1770,12 @@ export default function VirtualOffice({
           rect: mapRect(windowState.rect),
         };
       }),
-      browserWindowRects: openBrowserWindows.map((windowState) => {
-        const group = groupByKey.get(windowState.groupKey);
-        return {
-          id: `browser:${windowState.groupKey}`,
-          accentColor: group?.accentColor ?? "#94a3b8",
-          rect: mapRect(windowState.rect),
-        };
-      }),
-      vsCodeWindowRects: openVsCodeWindows.map((windowState) => {
-        const group = groupByKey.get(windowState.groupKey);
-        return {
-          id: `vscode:${windowState.groupKey}`,
-          accentColor: group?.accentColor ?? "#94a3b8",
-          rect: mapRect(windowState.rect),
-        };
-      }),
       adminWindowRect: adminWindowRect ? mapRect(adminWindowRect) : null,
     };
   }, [
     adminWindowRect,
     camera,
     deskByThreadId,
-    groupByKey,
-    openBrowserWindows,
-    openVsCodeWindows,
     expandedThreadWindows,
     scene.bounds,
     scene.desks,
@@ -2122,26 +2037,6 @@ export default function VirtualOffice({
       openThreadWindow(threadId);
     },
     [openThreadWindow, shouldSuppressClick],
-  );
-
-  const handleTvClick = useCallback(
-    (groupKey: string) => {
-      if (shouldSuppressClick()) {
-        return;
-      }
-      openBrowserWindow(groupKey);
-    },
-    [openBrowserWindow, shouldSuppressClick],
-  );
-
-  const handleServerRackClick = useCallback(
-    (groupKey: string) => {
-      if (shouldSuppressClick()) {
-        return;
-      }
-      openVsCodeWindow(groupKey);
-    },
-    [openVsCodeWindow, shouldSuppressClick],
   );
 
   const openCreateDialog = useCallback((projectId: ProjectId | null = null) => {
@@ -2613,39 +2508,10 @@ export default function VirtualOffice({
                       y: windowState.rect.y + deltaY,
                     },
                   }
-                : windowState,
+              : windowState,
             ),
           );
         }
-
-        setOpenBrowserWindows((current) =>
-          current.map((windowState) =>
-            dragState.groupKeys.includes(windowState.groupKey)
-              ? {
-                  ...windowState,
-                  rect: {
-                    ...windowState.rect,
-                    x: windowState.rect.x + deltaX,
-                    y: windowState.rect.y + deltaY,
-                  },
-                }
-              : windowState,
-          ),
-        );
-        setOpenVsCodeWindows((current) =>
-          current.map((windowState) =>
-            dragState.groupKeys.includes(windowState.groupKey)
-              ? {
-                  ...windowState,
-                  rect: {
-                    ...windowState.rect,
-                    x: windowState.rect.x + deltaX,
-                    y: windowState.rect.y + deltaY,
-                  },
-                }
-              : windowState,
-          ),
-        );
 
         setOfficeState((current) => {
           let changed = false;
@@ -2741,9 +2607,7 @@ export default function VirtualOffice({
   const handleWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
     const target = event.target instanceof Element ? event.target : null;
     if (
-      target?.closest(
-        "[data-office-thread-window], [data-office-browser-window], [data-office-vscode-window], [data-office-admin-window]",
-      )
+      target?.closest("[data-office-thread-window], [data-office-admin-window]")
     ) {
       return;
     }
@@ -2818,22 +2682,27 @@ export default function VirtualOffice({
     >
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-linear-to-t from-background via-background/70 to-transparent" />
 
-      {farOfficeLabels.map((label) => (
-        <div
-          key={label.key}
-          data-office-far-label={label.key}
-          className="pointer-events-none absolute z-10 max-w-72 -translate-x-1/2 -translate-y-1/2 rounded-full border px-4 py-2 text-center text-[20px] font-black tracking-[0.18em] text-foreground uppercase shadow-[0_18px_40px_-18px_rgba(15,23,42,0.9)] backdrop-blur-md"
-          style={{
-            left: label.center.x,
-            top: label.center.y,
-            borderColor: `${label.accentColor}88`,
-            background: `linear-gradient(180deg, ${label.accentColor}2e, rgba(15,23,42,0.82))`,
-            textShadow: "0 1px 0 rgba(15,23,42,0.9), 0 0 20px rgba(15,23,42,0.45)",
-            boxShadow: `0 0 0 1px ${label.accentColor}34, 0 18px 40px -18px rgba(15,23,42,0.9)`,
+      {farOfficeMenus.map(({ key, group, anchor, scale }) => (
+        <OfficeGroupMenu
+          key={key}
+          group={group}
+          groupAccentColorsByKey={officeState.groupAccentColorsByKey}
+          isFarMenu
+          scale={scale}
+          onCreate={(nextGroup) => {
+            openCreateDialog(
+              nextGroup.deskThreadIds[0]
+                ? (mergedThreads.find((thread) => thread.id === nextGroup.deskThreadIds[0])?.projectId ?? null)
+                : null,
+            );
           }}
-        >
-          {label.label}
-        </div>
+          onToggleCollapsed={toggleGroupCollapsed}
+          onDelete={(groupKey) => {
+            void handleDeleteGroup(groupKey);
+          }}
+          onSetAccentColor={setGroupAccentColor}
+          style={{ left: anchor.x, top: anchor.y }}
+        />
       ))}
 
       {groupSelectionRect ? (
@@ -2879,9 +2748,6 @@ export default function VirtualOffice({
               </MenuItem>
               <MenuItem onClick={() => handleAddFurniture("coffeeBar")}>
                 {OFFICE_FURNITURE_LABELS.coffeeBar}
-              </MenuItem>
-              <MenuItem onClick={() => handleAddFurniture("serverRack")}>
-                {OFFICE_FURNITURE_LABELS.serverRack}
               </MenuItem>
               <MenuItem onClick={() => handleAddFurniture("chair")}>
                 {OFFICE_FURNITURE_LABELS.chair}
@@ -3066,7 +2932,7 @@ export default function VirtualOffice({
           <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between border-b border-border/60 bg-background/82 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground/75">
             <span>Mini Map</span>
             <span className="text-muted-foreground">
-              {expandedThreadWindows.length + openBrowserWindows.length + openVsCodeWindows.length + (adminWindowRect ? 1 : 0)} windows
+              {expandedThreadWindows.length + (adminWindowRect ? 1 : 0)} windows
             </span>
           </div>
           <svg
@@ -3109,36 +2975,6 @@ export default function VirtualOffice({
                 stroke={windowRect.accentColor}
                 strokeWidth={1.5}
                 strokeDasharray="4 4"
-              />
-            ))}
-            {minimapState.browserWindowRects.map((windowRect) => (
-              <rect
-                key={windowRect.id}
-                data-office-minimap-window={windowRect.id}
-                x={windowRect.rect.x}
-                y={windowRect.rect.y}
-                width={windowRect.rect.width}
-                height={windowRect.rect.height}
-                rx={5}
-                fill="rgba(255,255,255,0.03)"
-                stroke={windowRect.accentColor}
-                strokeWidth={1.5}
-                strokeDasharray="6 6"
-              />
-            ))}
-            {minimapState.vsCodeWindowRects.map((windowRect) => (
-              <rect
-                key={windowRect.id}
-                data-office-minimap-window={windowRect.id}
-                x={windowRect.rect.x}
-                y={windowRect.rect.y}
-                width={windowRect.rect.width}
-                height={windowRect.rect.height}
-                rx={5}
-                fill="rgba(255,255,255,0.03)"
-                stroke={windowRect.accentColor}
-                strokeWidth={1.5}
-                strokeDasharray="10 6"
               />
             ))}
             {minimapState.adminWindowRect ? (
@@ -3250,160 +3086,22 @@ export default function VirtualOffice({
                 onPointerUp={handleDragPointerEnd}
                 onPointerCancel={handleDragPointerEnd}
               >
-              <div
-                className={`absolute flex items-center gap-1.5 border bg-background/95 px-3 py-1 text-[10px] font-semibold tracking-[0.12em] text-foreground/75 uppercase shadow-sm ${
-                  group.isCollapsed
-                    ? "inset-x-2 top-2 rounded-xl"
-                    : "left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 rounded-full"
-                }`}
-                style={{
-                  borderColor: `${group.accentColor}88`,
-                  boxShadow: `0 10px 30px -20px ${group.accentColor}`,
+              <OfficeGroupMenu
+                group={group}
+                groupAccentColorsByKey={officeState.groupAccentColorsByKey}
+                onCreate={(nextGroup) => {
+                  openCreateDialog(
+                    nextGroup.deskThreadIds[0]
+                      ? (mergedThreads.find((thread) => thread.id === nextGroup.deskThreadIds[0])?.projectId ?? null)
+                      : null,
+                  );
                 }}
-              >
-                <ProjectOfficeIcon cwd={group.cwd} />
-                <span className="min-w-0 flex-1 truncate">{group.label}</span>
-                <div
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                  }}
-                >
-                  <Menu>
-                    <MenuTrigger
-                      render={
-                        <button
-                          type="button"
-                          className="inline-flex h-5 items-center gap-1 rounded-full border px-1.5 shadow-sm transition-transform hover:scale-105"
-                          style={{
-                            borderColor: `${group.accentColor}88`,
-                            backgroundColor: `${group.accentColor}24`,
-                            boxShadow: `0 0 0 1px ${group.accentColor}22`,
-                          }}
-                          aria-label={`Change color for ${group.label}`}
-                          data-office-group-color-trigger={group.key}
-                        />
-                      }
-                    >
-                      <span
-                        className="inline-flex size-2.5 rounded-full border border-black/10"
-                        style={{ backgroundColor: group.accentColor }}
-                      />
-                      <span className="text-[10px] font-medium normal-case">Color</span>
-                    </MenuTrigger>
-                    <MenuPopup align="end" sideOffset={8}>
-                      <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Group color</div>
-                      <MenuItem
-                        data-office-group-color-option={`${group.key}:auto`}
-                        onClick={() => {
-                          setGroupAccentColor(group.key, null);
-                        }}
-                      >
-                        <div className="flex w-full items-center gap-2">
-                          <span
-                            className="inline-flex size-3 rounded-full border border-border/70 bg-linear-to-r from-transparent via-foreground/45 to-transparent"
-                            style={{
-                              boxShadow: `0 0 0 1px ${getDefaultOfficeGroupAccent(group.key)}24`,
-                            }}
-                          />
-                          <span>Auto</span>
-                          <span className="ml-auto text-[10px] text-muted-foreground">
-                            {officeState.groupAccentColorsByKey[group.key] ? "" : "Selected"}
-                          </span>
-                        </div>
-                      </MenuItem>
-                      <MenuSeparator />
-                      {OFFICE_GROUP_ACCENT_OPTIONS.map((option) => (
-                        <MenuItem
-                          key={option.accentColor}
-                          data-office-group-color-option={`${group.key}:${option.accentColor}`}
-                          onClick={() => {
-                            setGroupAccentColor(group.key, option.accentColor);
-                          }}
-                        >
-                          <div className="flex w-full items-center gap-2">
-                            <span
-                              className="inline-flex size-3 rounded-full border border-black/10"
-                              style={{ backgroundColor: option.accentColor }}
-                            />
-                            <span>{option.label}</span>
-                            <span className="ml-auto text-[10px] text-muted-foreground">
-                              {officeState.groupAccentColorsByKey[group.key] === option.accentColor ? "Selected" : ""}
-                            </span>
-                          </div>
-                        </MenuItem>
-                      ))}
-                    </MenuPopup>
-                  </Menu>
-                </div>
-                <button
-                  type="button"
-                  className="inline-flex h-5 items-center gap-1 rounded-full border px-1.5 text-[10px] font-medium normal-case"
-                  style={{
-                    borderColor: `${group.accentColor}88`,
-                    color: group.accentColor,
-                    backgroundColor: `${group.accentColor}14`,
-                  }}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    openCreateDialog(
-                      group.deskThreadIds[0]
-                        ? (mergedThreads.find((thread) => thread.id === group.deskThreadIds[0])?.projectId ?? null)
-                        : null,
-                    );
-                  }}
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                  }}
-                  aria-label={`Create agent in ${group.label}`}
-                >
-                  <PlusIcon className="size-3" />
-                  Create
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex h-5 items-center gap-1 rounded-full border px-1.5 text-[10px] font-medium normal-case"
-                  style={{
-                    borderColor: `${group.accentColor}88`,
-                    color: group.accentColor,
-                    backgroundColor: `${group.accentColor}14`,
-                  }}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    toggleGroupCollapsed(group.key);
-                  }}
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                  }}
-                  aria-label={`${group.isCollapsed ? "Expand" : "Collapse"} ${group.label}`}
-                  data-office-group-collapse={group.key}
-                >
-                  {group.isCollapsed ? <ChevronRightIcon className="size-3" /> : <ChevronDownIcon className="size-3" />}
-                  {group.isCollapsed ? "Expand" : "Collapse"}
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex h-5 items-center gap-1 rounded-full border px-1.5 text-[10px] font-medium normal-case text-red-200"
-                  style={{
-                    borderColor: "rgba(248,113,113,0.55)",
-                    backgroundColor: "rgba(127,29,29,0.22)",
-                  }}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    void handleDeleteGroup(group.key);
-                  }}
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                  }}
-                  aria-label={`Delete ${group.label}`}
-                  data-office-group-delete={group.key}
-                >
-                  <Trash2Icon className="size-3" />
-                  Delete
-                </button>
-              </div>
+                onToggleCollapsed={toggleGroupCollapsed}
+                onDelete={(groupKey) => {
+                  void handleDeleteGroup(groupKey);
+                }}
+                onSetAccentColor={setGroupAccentColor}
+              />
               {!group.isCollapsed ? (
                 <>
                   <div
@@ -3478,44 +3176,26 @@ export default function VirtualOffice({
           })()
         ))}
 
-        {scene.furniture.map((element) => {
-          const tvGroupKey =
-            element.type === "tv" && typeof element.metadata?.groupKey === "string"
-              ? element.metadata.groupKey
-              : null;
-          const serverRackGroupKey =
-            element.type === "serverRack" && typeof element.metadata?.groupKey === "string"
-              ? element.metadata.groupKey
-              : null;
-
-          return (
-            <FurnitureNode
-              key={element.id}
-              element={element}
-              isSelected={selectedFurnitureId === element.id}
-              onPointerDown={(event) =>
-                beginDrag(event, {
-                  pointerId: event.pointerId,
-                  kind: "element",
-                  key: element.id,
-                  startPointer: { x: event.clientX, y: event.clientY },
-                  startValue: { x: element.x, y: element.y },
-                  moved: false,
-                })
-              }
-              onPointerMove={handleDragPointerMove}
-              onPointerUp={handleDragPointerEnd}
-              onPointerCancel={handleDragPointerEnd}
-              onClick={
-                tvGroupKey
-                  ? () => handleTvClick(tvGroupKey)
-                  : serverRackGroupKey
-                    ? () => handleServerRackClick(serverRackGroupKey)
-                    : undefined
-              }
-            />
-          );
-        })}
+        {scene.furniture.map((element) => (
+          <FurnitureNode
+            key={element.id}
+            element={element}
+            isSelected={selectedFurnitureId === element.id}
+            onPointerDown={(event) =>
+              beginDrag(event, {
+                pointerId: event.pointerId,
+                kind: "element",
+                key: element.id,
+                startPointer: { x: event.clientX, y: event.clientY },
+                startValue: { x: element.x, y: element.y },
+                moved: false,
+              })
+            }
+            onPointerMove={handleDragPointerMove}
+            onPointerUp={handleDragPointerEnd}
+            onPointerCancel={handleDragPointerEnd}
+          />
+        ))}
 
         {scene.desks.map((desk) => (
           <div
@@ -3818,64 +3498,6 @@ export default function VirtualOffice({
                   />
                 </g>
               ))}
-              {openBrowserWindowConnections.map((connection) => (
-                <g key={connection.groupKey} data-office-browser-link={connection.groupKey}>
-                  <line
-                    x1={connection.tvPoint.x}
-                    y1={connection.tvPoint.y}
-                    x2={connection.windowPoint.x}
-                    y2={connection.windowPoint.y}
-                    stroke={connection.accentColor}
-                    strokeOpacity="0.72"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeDasharray="6 8"
-                  />
-                  <circle
-                    cx={connection.tvPoint.x}
-                    cy={connection.tvPoint.y}
-                    r="4.5"
-                    fill={connection.accentColor}
-                    fillOpacity="0.9"
-                  />
-                  <circle
-                    cx={connection.windowPoint.x}
-                    cy={connection.windowPoint.y}
-                    r="4.5"
-                    fill={connection.accentColor}
-                    fillOpacity="0.9"
-                  />
-                </g>
-              ))}
-              {openVsCodeWindowConnections.map((connection) => (
-                <g key={connection.groupKey} data-office-vscode-link={connection.groupKey}>
-                  <line
-                    x1={connection.rackPoint.x}
-                    y1={connection.rackPoint.y}
-                    x2={connection.windowPoint.x}
-                    y2={connection.windowPoint.y}
-                    stroke={connection.accentColor}
-                    strokeOpacity="0.76"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeDasharray="10 8"
-                  />
-                  <circle
-                    cx={connection.rackPoint.x}
-                    cy={connection.rackPoint.y}
-                    r="4.5"
-                    fill={connection.accentColor}
-                    fillOpacity="0.9"
-                  />
-                  <circle
-                    cx={connection.windowPoint.x}
-                    cy={connection.windowPoint.y}
-                    r="4.5"
-                    fill={connection.accentColor}
-                    fillOpacity="0.9"
-                  />
-                </g>
-              ))}
           </svg>
         )}
 
@@ -3951,68 +3573,6 @@ export default function VirtualOffice({
                 />
               );
             })}
-
-        {officeWindowsMinimizedForZoom
-          ? null
-          : openBrowserWindows.map((windowState, index) => {
-          const group = groupByKey.get(windowState.groupKey);
-          const displayRect = projectedBrowserWindowRects.get(windowState.groupKey);
-          if (!group || !displayRect) {
-            return null;
-          }
-
-          return (
-            <OfficeBrowserWindow
-              key={windowState.groupKey}
-              groupKey={windowState.groupKey}
-              groupLabel={group.label}
-              rect={windowState.rect}
-              displayRect={displayRect}
-              zoom={camera.zoom}
-              zIndex={windowZIndices.get(`browser:${windowState.groupKey}`) ?? 19_500 + index}
-              isFocused={windowStackOrder[windowStackOrder.length - 1] === `browser:${windowState.groupKey}`}
-              accentColor={group.accentColor}
-              previews={previewsByGroupKey[windowState.groupKey] ?? []}
-              selectedPreviewId={windowState.selectedPreviewId}
-              showChooser={windowState.showChooser}
-              onClose={() => closeBrowserWindow(windowState.groupKey)}
-              onFocus={() => focusBrowserWindow(windowState.groupKey)}
-              onRectChange={(rect) => updateBrowserWindowRect(windowState.groupKey, rect)}
-              onSelectPreview={(previewId) => selectBrowserPreview(windowState.groupKey, previewId)}
-              onShowChooser={() => showBrowserChooser(windowState.groupKey)}
-            />
-          );
-        })}
-
-        {officeWindowsMinimizedForZoom
-          ? null
-          : openVsCodeWindows.map((windowState, index) => {
-          const group = groupByKey.get(windowState.groupKey);
-          const displayRect = projectedVsCodeWindowRects.get(windowState.groupKey);
-          if (!group || !displayRect) {
-            return null;
-          }
-
-          return (
-            <OfficeVsCodeWindow
-              key={windowState.groupKey}
-              groupKey={windowState.groupKey}
-              groupLabel={group.label}
-              rect={windowState.rect}
-              displayRect={displayRect}
-              zoom={camera.zoom}
-              zIndex={windowZIndices.get(`vscode:${windowState.groupKey}`) ?? 19_700 + index}
-              isFocused={windowStackOrder[windowStackOrder.length - 1] === `vscode:${windowState.groupKey}`}
-              accentColor={group.accentColor}
-              workspacePath={windowState.workspacePath}
-              isDesktopAvailable={windowState.isDesktopAvailable}
-              onClose={() => closeVsCodeWindow(windowState.groupKey)}
-              onFocus={() => focusVsCodeWindow(windowState.groupKey)}
-              onRectChange={(rect) => updateVsCodeWindowRect(windowState.groupKey, rect)}
-              onReopenInVsCode={() => openVsCodeWindow(windowState.groupKey, { relaunch: true })}
-            />
-          );
-        })}
 
         {adminWindowRect && projectedAdminWindowRect ? (
           <OfficeAdminWindow
