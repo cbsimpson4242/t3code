@@ -535,6 +535,14 @@ describe("VirtualOffice interactions", () => {
       expect(getRequiredElement<HTMLElement>("[data-office-far-menu='group-a']").textContent).toContain("group-a");
       expect(getRequiredElement<HTMLElement>("[data-office-far-menu='group-b']").textContent).toContain("group-b");
 
+      const groupBeforeDrag = getRequiredElement<HTMLElement>("[data-office-group='group-a']").getBoundingClientRect();
+
+      await dragSelector("[data-office-far-menu='group-a']", { x: 80, y: 36 });
+
+      const groupAfterDrag = getRequiredElement<HTMLElement>("[data-office-group='group-a']").getBoundingClientRect();
+      expect(groupAfterDrag.left).toBeGreaterThan(groupBeforeDrag.left + 20);
+      expect(groupAfterDrag.top).toBeGreaterThan(groupBeforeDrag.top + 8);
+
       getRequiredElement<HTMLButtonElement>(
         "[data-office-far-menu='group-a'] [data-office-group-collapse='group-a']",
       ).click();

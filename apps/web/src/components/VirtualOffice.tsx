@@ -514,6 +514,7 @@ function OfficeGroupMenu(props: {
   isFarMenu?: boolean;
   scale?: number;
   style?: React.CSSProperties;
+  onMenuPointerDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
   onCreate: (group: OfficeSceneGroup) => void;
   onToggleCollapsed: (groupKey: string) => void;
   onDelete: (groupKey: string) => void;
@@ -525,6 +526,7 @@ function OfficeGroupMenu(props: {
     isFarMenu = false,
     scale = 1,
     style,
+    onMenuPointerDown,
     onCreate,
     onToggleCollapsed,
     onDelete,
@@ -532,21 +534,21 @@ function OfficeGroupMenu(props: {
   } = props;
 
   const containerClassName = isFarMenu
-    ? "absolute z-10 flex min-w-max -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full border bg-background/96 px-3 py-2 text-xs font-semibold tracking-[0.12em] text-foreground/80 uppercase shadow-[0_18px_40px_-18px_rgba(15,23,42,0.9)] backdrop-blur-md"
+    ? "absolute z-10 flex min-w-max -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-full border bg-background/96 px-2.5 py-1.5 text-[11px] font-semibold tracking-[0.12em] text-foreground/80 uppercase shadow-[0_18px_40px_-18px_rgba(15,23,42,0.9)] backdrop-blur-md cursor-grab active:cursor-grabbing"
     : `absolute flex items-center gap-1.5 border bg-background/95 px-3 py-1 text-[10px] font-semibold tracking-[0.12em] text-foreground/75 uppercase shadow-sm ${
         group.isCollapsed
           ? "inset-x-2 top-2 rounded-xl"
           : "left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 rounded-full"
       }`;
   const actionButtonClassName = isFarMenu
-    ? "inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium normal-case"
+    ? "inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11px] font-medium normal-case"
     : "inline-flex h-5 items-center gap-1 rounded-full border px-1.5 text-[10px] font-medium normal-case";
   const colorTriggerClassName = isFarMenu
-    ? "inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 shadow-sm transition-transform hover:scale-105"
+    ? "inline-flex h-6 items-center gap-1 rounded-full border px-2 shadow-sm transition-transform hover:scale-105"
     : "inline-flex h-5 items-center gap-1 rounded-full border px-1.5 shadow-sm transition-transform hover:scale-105";
-  const iconClassName = isFarMenu ? "size-4" : "size-3";
+  const iconClassName = isFarMenu ? "size-3.5" : "size-3";
   const colorDotClassName = isFarMenu
-    ? "inline-flex size-3 rounded-full border border-black/10"
+    ? "inline-flex size-2.5 rounded-full border border-black/10"
     : "inline-flex size-2.5 rounded-full border border-black/10";
 
   return (
@@ -567,6 +569,13 @@ function OfficeGroupMenu(props: {
         ...style,
       }}
       onPointerDown={(event) => {
+        if (isFarMenu) {
+          const target = event.target instanceof Element ? event.target : null;
+          if (!target?.closest("button, [data-slot='menu-item']")) {
+            onMenuPointerDown?.(event);
+            return;
+          }
+        }
         event.stopPropagation();
       }}
       onClick={(event) => {
@@ -1381,7 +1390,7 @@ export default function VirtualOffice({
               },
               camera,
             ),
-            scale: clamp(OFFICE_FAR_LABEL_ZOOM_THRESHOLD / Math.max(camera.zoom, 0.32), 1, 1.9),
+            scale: clamp(OFFICE_FAR_LABEL_ZOOM_THRESHOLD / Math.max(camera.zoom, 0.5), 1, 1.28),
           })),
     [camera, scene.groups],
   );
@@ -2244,6 +2253,38 @@ export default function VirtualOffice({
     [],
   );
 
+  const startGroupDrag = useCallback(
+    (group: OfficeSceneGroup, event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0) {
+        return;
+      }
+      const isSelected = selectedGroupKeySet.has(group.key);
+      const dragGroupKeys = isSelected ? selectedGroupKeys : [group.key];
+      const linkedThreadIdsByGroupKey = Object.fromEntries(
+        dragGroupKeys.map((groupKey) => [groupKey, groupByKey.get(groupKey)?.deskThreadIds ?? []] as const),
+      );
+      const startAnchorsByGroupKey = Object.fromEntries(
+        dragGroupKeys.flatMap((groupKey) => {
+          const dragGroup = groupByKey.get(groupKey);
+          return dragGroup ? ([[groupKey, { x: dragGroup.anchor.x, y: dragGroup.anchor.y }] as const]) : [];
+        }),
+      );
+
+      setSelectedGroupKeys(dragGroupKeys);
+      beginDrag(event, {
+        pointerId: event.pointerId,
+        kind: "group",
+        groupKeys: dragGroupKeys,
+        linkedThreadIdsByGroupKey,
+        startPointer: { x: event.clientX, y: event.clientY },
+        startAnchorsByGroupKey,
+        lastDelta: { x: 0, y: 0 },
+        moved: false,
+      });
+    },
+    [beginDrag, groupByKey, selectedGroupKeys, selectedGroupKeySet],
+  );
+
   const endInteraction = useCallback(() => {
     dragStateRef.current = null;
     panStateRef.current = null;
@@ -2689,6 +2730,9 @@ export default function VirtualOffice({
           groupAccentColorsByKey={officeState.groupAccentColorsByKey}
           isFarMenu
           scale={scale}
+          onMenuPointerDown={(event) => {
+            startGroupDrag(group, event);
+          }}
           onCreate={(nextGroup) => {
             openCreateDialog(
               nextGroup.deskThreadIds[0]
@@ -3030,16 +3074,6 @@ export default function VirtualOffice({
         {scene.groups.map((group) => (
           (() => {
             const isSelected = selectedGroupKeySet.has(group.key);
-            const dragGroupKeys = isSelected ? selectedGroupKeys : [group.key];
-            const linkedThreadIdsByGroupKey = Object.fromEntries(
-              dragGroupKeys.map((groupKey) => [groupKey, groupByKey.get(groupKey)?.deskThreadIds ?? []] as const),
-            );
-            const startAnchorsByGroupKey = Object.fromEntries(
-              dragGroupKeys.flatMap((groupKey) => {
-                const dragGroup = groupByKey.get(groupKey);
-                return dragGroup ? ([[groupKey, { x: dragGroup.anchor.x, y: dragGroup.anchor.y }] as const]) : [];
-              }),
-            );
 
             return (
               <div
@@ -3066,22 +3100,7 @@ export default function VirtualOffice({
                     ? `linear-gradient(180deg, ${group.accentColor}18, rgba(15,23,42,0.24))`
                     : `linear-gradient(180deg, ${group.accentColor}12, rgba(255,255,255,0.02))`,
                 }}
-                onPointerDown={(event) => {
-                  if (event.button !== 0) {
-                    return;
-                  }
-                  setSelectedGroupKeys(dragGroupKeys);
-                  beginDrag(event, {
-                    pointerId: event.pointerId,
-                    kind: "group",
-                    groupKeys: dragGroupKeys,
-                    linkedThreadIdsByGroupKey,
-                    startPointer: { x: event.clientX, y: event.clientY },
-                    startAnchorsByGroupKey,
-                    lastDelta: { x: 0, y: 0 },
-                    moved: false,
-                  });
-                }}
+                onPointerDown={(event) => startGroupDrag(group, event)}
                 onPointerMove={handleDragPointerMove}
                 onPointerUp={handleDragPointerEnd}
                 onPointerCancel={handleDragPointerEnd}
