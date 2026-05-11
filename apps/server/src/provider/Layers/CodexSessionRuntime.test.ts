@@ -27,18 +27,22 @@ function makeThreadOpenResponse(
     modelProvider: "openai",
     approvalPolicy: "never",
     approvalsReviewer: "user",
-    sandbox: { type: "danger-full-access" },
+    sandbox: { type: "dangerFullAccess" },
     thread: {
       id: threadId,
-      createdAt: "2026-04-18T00:00:00.000Z",
-      source: { session: "cli" },
+      cliVersion: "0.0.0-test",
+      createdAt: 1_776_465_600,
+      cwd: "/tmp/project",
+      ephemeral: false,
+      modelProvider: "openai",
+      preview: "",
+      sessionId: `session-${threadId}`,
+      source: "appServer",
       turns: [],
-      status: {
-        state: "idle",
-        activeFlags: [],
-      },
+      status: { type: "idle" },
+      updatedAt: 1_776_465_600,
     },
-  } as unknown as CodexRpc.ClientRequestResponsesByMethod["thread/start"];
+  };
 }
 
 describe("buildTurnStartParams", () => {
@@ -197,6 +201,42 @@ describe("isRecoverableThreadResumeError", () => {
 });
 
 describe("openCodexThread", () => {
+  it("accepts thread/start responses that omit the Codex session id", async () => {
+    const started = makeThreadOpenResponse("fresh-thread");
+    const { sessionId: _sessionId, ...threadWithoutSessionId } = started.thread;
+    const client = {
+      raw: {
+        request: (method: "thread/start" | "thread/resume", _payload: unknown) => {
+          assert.equal(method, "thread/start");
+          return Effect.succeed({
+            ...started,
+            thread: threadWithoutSessionId,
+          });
+        },
+      },
+      request: <M extends "thread/start" | "thread/resume">(
+        _method: M,
+        _payload: CodexRpc.ClientRequestParamsByMethod[M],
+      ) =>
+        Effect.die(new Error("openCodexThread should use raw requests for compatibility decoding")),
+    };
+
+    const opened = await Effect.runPromise(
+      openCodexThread({
+        client,
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: "gpt-5.3-codex",
+        serviceTier: undefined,
+        resumeThreadId: undefined,
+      }),
+    );
+
+    assert.equal(opened.thread.id, "fresh-thread");
+    assert.equal(opened.thread.sessionId, "fresh-thread");
+  });
+
   it("falls back to thread/start when resume fails recoverably", async () => {
     const calls: Array<{ method: "thread/start" | "thread/resume"; payload: unknown }> = [];
     const started = makeThreadOpenResponse("fresh-thread");

@@ -42,6 +42,12 @@ import {
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
 } from "../CodexDeveloperInstructions.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
+const decodeV2ThreadStartResponse = Schema.decodeUnknownEffect(
+  EffectCodexSchema.V2ThreadStartResponse,
+);
+const decodeV2ThreadResumeResponse = Schema.decodeUnknownEffect(
+  EffectCodexSchema.V2ThreadResumeResponse,
+);
 
 const PROVIDER = ProviderDriverKind.make("codex");
 
@@ -423,10 +429,66 @@ type CodexThreadOpenResponse =
 type CodexThreadOpenMethod = "thread/start" | "thread/resume";
 
 interface CodexThreadOpenClient {
+  readonly raw?: {
+    readonly request: (
+      method: CodexThreadOpenMethod,
+      payload: unknown,
+    ) => Effect.Effect<unknown, CodexErrors.CodexAppServerError>;
+  };
   readonly request: <M extends CodexThreadOpenMethod>(
     method: M,
     payload: CodexRpc.ClientRequestParamsByMethod[M],
   ) => Effect.Effect<CodexRpc.ClientRequestResponsesByMethod[M], CodexErrors.CodexAppServerError>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeThreadOpenResponse(raw: unknown): unknown {
+  if (!isRecord(raw) || !isRecord(raw.thread) || typeof raw.thread.sessionId === "string") {
+    return raw;
+  }
+
+  const fallbackSessionId =
+    typeof raw.thread.id === "string" && raw.thread.id.length > 0 ? raw.thread.id : "unknown";
+  return {
+    ...raw,
+    thread: {
+      ...raw.thread,
+      sessionId: fallbackSessionId,
+    },
+  };
+}
+
+function decodeThreadOpenResponse<M extends CodexThreadOpenMethod>(
+  method: M,
+  raw: unknown,
+): Effect.Effect<CodexRpc.ClientRequestResponsesByMethod[M], CodexErrors.CodexAppServerError> {
+  const normalized = normalizeThreadOpenResponse(raw);
+  const decoded =
+    method === "thread/start"
+      ? decodeV2ThreadStartResponse(normalized)
+      : decodeV2ThreadResumeResponse(normalized);
+
+  return decoded.pipe(
+    Effect.mapError((error) => toProtocolParseError(`Invalid ${method} response payload`, error)),
+    Effect.map((response) => response as CodexRpc.ClientRequestResponsesByMethod[M]),
+  );
+}
+
+function requestThreadOpen<M extends CodexThreadOpenMethod>(
+  client: CodexThreadOpenClient,
+  method: M,
+  payload: CodexRpc.ClientRequestParamsByMethod[M],
+): Effect.Effect<CodexRpc.ClientRequestResponsesByMethod[M], CodexErrors.CodexAppServerError> {
+  if (client.raw) {
+    return client.raw
+      .request(method, payload)
+      .pipe(Effect.flatMap((raw) => decodeThreadOpenResponse(method, raw)));
+  }
+
+  return client.request(method, payload);
 }
 
 export const openCodexThread = (input: {
@@ -447,25 +509,23 @@ export const openCodexThread = (input: {
   });
 
   if (resumeThreadId === undefined) {
-    return input.client.request("thread/start", startParams);
+    return requestThreadOpen(input.client, "thread/start", startParams);
   }
 
-  return input.client
-    .request("thread/resume", {
-      threadId: resumeThreadId,
-      ...startParams,
-    })
-    .pipe(
-      Effect.catchIf(isRecoverableThreadResumeError, (error) =>
-        Effect.logWarning("codex app-server thread resume fell back to fresh start", {
-          threadId: input.threadId,
-          requestedRuntimeMode: input.runtimeMode,
-          resumeThreadId,
-          recoverable: true,
-          cause: error.message,
-        }).pipe(Effect.andThen(input.client.request("thread/start", startParams))),
-      ),
-    );
+  return requestThreadOpen(input.client, "thread/resume", {
+    threadId: resumeThreadId,
+    ...startParams,
+  }).pipe(
+    Effect.catchIf(isRecoverableThreadResumeError, (error) =>
+      Effect.logWarning("codex app-server thread resume fell back to fresh start", {
+        threadId: input.threadId,
+        requestedRuntimeMode: input.runtimeMode,
+        resumeThreadId,
+        recoverable: true,
+        cause: error.message,
+      }).pipe(Effect.andThen(requestThreadOpen(input.client, "thread/start", startParams))),
+    ),
+  );
 };
 
 function readNotificationThreadId(notification: CodexServerNotification): string | undefined {

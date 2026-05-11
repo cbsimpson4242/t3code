@@ -60,6 +60,9 @@ const runCommand = Effect.fn("runCommand")(function* (command: ChildProcess.Comm
   }
 });
 
+const windowsCommandShim = (command: string) =>
+  process.platform === "win32" ? `${command}.cmd` : command;
+
 interface PublishIconBackup {
   readonly targetPath: string;
   readonly backupPath: string;
@@ -160,8 +163,6 @@ const buildCmd = Command.make(
           cwd: serverDir,
           stdout: config.verbose ? "inherit" : "ignore",
           stderr: "inherit",
-          // Windows needs shell mode to resolve `.cmd` shims on PATH.
-          shell: process.platform === "win32",
         }),
       );
 
@@ -253,12 +254,10 @@ const publishCmd = Command.make(
 
             yield* Effect.log(`[cli] Running: npm ${args.join(" ")}`);
             yield* runCommand(
-              ChildProcess.make("npm", [...args], {
+              ChildProcess.make(windowsCommandShim("npm"), [...args], {
                 cwd: serverDir,
                 stdout: config.verbose ? "inherit" : "ignore",
                 stderr: "inherit",
-                // Windows needs shell mode to resolve .cmd shims.
-                shell: process.platform === "win32",
               }),
             );
           }),
