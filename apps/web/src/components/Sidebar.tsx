@@ -280,6 +280,7 @@ function buildThreadJumpLabelMap(input: {
 
 interface SidebarThreadRowProps {
   thread: SidebarThreadSummary;
+  projectKey: string;
   projectCwd: string | null;
   orderedProjectThreadKeys: readonly string[];
   isActive: boolean;
@@ -339,6 +340,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     attemptArchiveThread,
     openPrLink,
     thread,
+    projectKey,
   } = props;
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const threadKey = scopedThreadKey(threadRef);
@@ -542,9 +544,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     (event: React.MouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
       event.stopPropagation();
-      useMultiChatWorkspaceStore.getState().openPane(threadRef);
+      useMultiChatWorkspaceStore.getState().openPane(projectKey, threadRef);
     },
-    [threadRef],
+    [projectKey, threadRef],
   );
   const rowButtonRender = useMemo(() => <div role="button" tabIndex={0} />, []);
 
@@ -858,6 +860,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
             <SidebarThreadRow
               key={threadKey}
               thread={thread}
+              projectKey={projectKey}
               projectCwd={projectCwd}
               orderedProjectThreadKeys={orderedProjectThreadKeys}
               isActive={activeRouteThreadKey === threadKey}
@@ -1259,7 +1262,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       if (useThreadSelectionStore.getState().hasSelection()) {
         clearSelection();
       }
-      useMultiChatWorkspaceStore.getState().closeAll();
       setProjectExpanded(project.projectKey, true);
       const activeThreadInProject =
         activeRouteThreadKey !== null && orderedProjectThreadKeys.includes(activeRouteThreadKey);
@@ -2007,7 +2009,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       );
 
       if (clicked === "open-beside") {
-        useMultiChatWorkspaceStore.getState().openPane(threadRef);
+        useMultiChatWorkspaceStore.getState().openPane(project.projectKey, threadRef);
         return;
       }
 
@@ -2062,6 +2064,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       markThreadUnread,
       memberProjectByScopedKey,
       project.cwd,
+      project.projectKey,
     ],
   );
 

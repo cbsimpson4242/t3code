@@ -65,38 +65,31 @@ const LazyDiffPanel = (props: { mode: DiffPanelMode }) => {
 
 const chatPaneKey = (threadRef: ScopedThreadRef) => scopedThreadKey(threadRef);
 
-const selectVisibleWorkspacePaneKeys = (
+const selectThreadWorkspaceKey = (
   store: import("../store").AppState,
-  primaryThreadRef: ScopedThreadRef,
-  panes: readonly { threadRef: ScopedThreadRef }[],
+  threadRef: ScopedThreadRef,
   projectGroupingSettings: ReturnType<typeof selectProjectGroupingSettings>,
 ) => {
-  const primaryThread = selectThreadByRef(store, primaryThreadRef);
-  if (!primaryThread) return "";
-  const primaryProject = selectProjectByRef(
+  const thread = selectThreadByRef(store, threadRef);
+  if (!thread) return null;
+  const project = selectProjectByRef(
     store,
-    scopeProjectRef(primaryThread.environmentId, primaryThread.projectId),
+    scopeProjectRef(thread.environmentId, thread.projectId),
   );
-  if (!primaryProject) return "";
-  const primaryProjectKey = deriveLogicalProjectKeyFromSettings(
-    primaryProject,
-    projectGroupingSettings,
-  );
+  if (!project) return null;
+  return deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings);
+};
 
+const selectVisibleWorkspacePaneKeys = (
+  store: import("../store").AppState,
+  workspaceKey: string | null,
+  panes: readonly { workspaceKey: string; threadRef: ScopedThreadRef }[],
+) => {
+  if (!workspaceKey) return "";
   return panes
     .flatMap((pane) => {
-      const paneThread = selectThreadByRef(store, pane.threadRef);
-      if (!paneThread) return [];
-      const paneProject = selectProjectByRef(
-        store,
-        scopeProjectRef(paneThread.environmentId, paneThread.projectId),
-      );
-      if (!paneProject) return [];
-      const paneProjectKey = deriveLogicalProjectKeyFromSettings(
-        paneProject,
-        projectGroupingSettings,
-      );
-      return paneProjectKey === primaryProjectKey ? [chatPaneKey(pane.threadRef)] : [];
+      if (pane.workspaceKey !== workspaceKey) return [];
+      return selectThreadExistsByRef(store, pane.threadRef) ? [chatPaneKey(pane.threadRef)] : [];
     })
     .join("\n");
 };
@@ -112,12 +105,24 @@ const MultiChatWorkspace = (props: {
   const closePane = useMultiChatWorkspaceStore((state) => state.closePane);
   const projectGroupingSettings = useSettings(selectProjectGroupingSettings);
   const primaryPaneKey = chatPaneKey(primaryThreadRef);
+  const workspaceKey = useStore(
+    useMemo(
+      () => (store) => selectThreadWorkspaceKey(store, primaryThreadRef, projectGroupingSettings),
+      [primaryThreadRef, projectGroupingSettings],
+    ),
+  );
   const visiblePaneKeyList = useStore(
     useMemo(
-      () => (store) =>
-        selectVisibleWorkspacePaneKeys(store, primaryThreadRef, panes, projectGroupingSettings),
-      [panes, primaryThreadRef, projectGroupingSettings],
+      () => (store) => selectVisibleWorkspacePaneKeys(store, workspaceKey, panes),
+      [panes, workspaceKey],
     ),
+  );
+  const openWorkspacePane = useCallback(
+    (threadRef: ScopedThreadRef) => {
+      if (!workspaceKey) return;
+      openPane(workspaceKey, threadRef);
+    },
+    [openPane, workspaceKey],
   );
   const existingPaneKeys = useMemo(
     () => new Set(visiblePaneKeyList.length > 0 ? visiblePaneKeyList.split("\n") : []),
@@ -155,7 +160,7 @@ const MultiChatWorkspace = (props: {
             routeKind="server"
             enableGlobalShortcuts={pane.primary}
             onDiffPanelOpen={onDiffPanelOpen}
-            onOpenWorkspacePane={openPane}
+            {...(workspaceKey ? { onOpenWorkspacePane: openWorkspacePane } : {})}
             {...(!pane.primary ? { onCloseWorkspacePane: closePane } : {})}
             reserveTitleBarControlInset={
               reserveTitleBarControlInset !== undefined

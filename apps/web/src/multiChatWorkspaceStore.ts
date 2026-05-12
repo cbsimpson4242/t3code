@@ -5,12 +5,13 @@ import { create } from "zustand";
 export const MAX_WORKSPACE_CHAT_PANES = 4;
 
 export interface WorkspaceChatPane {
+  readonly workspaceKey: string;
   readonly threadRef: ScopedThreadRef;
 }
 
 interface MultiChatWorkspaceState {
   readonly panes: WorkspaceChatPane[];
-  readonly openPane: (threadRef: ScopedThreadRef) => void;
+  readonly openPane: (workspaceKey: string, threadRef: ScopedThreadRef) => void;
   readonly closePane: (threadRef: ScopedThreadRef) => void;
   readonly closeAll: () => void;
   readonly prunePrimaryPane: (threadRef: ScopedThreadRef) => void;
@@ -22,11 +23,21 @@ function threadRefsEqual(left: ScopedThreadRef, right: ScopedThreadRef): boolean
 
 export function openWorkspacePane(
   panes: readonly WorkspaceChatPane[],
+  workspaceKey: string,
   threadRef: ScopedThreadRef,
 ): WorkspaceChatPane[] {
   const key = scopedThreadKey(threadRef);
-  const withoutExisting = panes.filter((pane) => scopedThreadKey(pane.threadRef) !== key);
-  return [...withoutExisting, { threadRef }].slice(-(MAX_WORKSPACE_CHAT_PANES - 1));
+  const otherWorkspacePanes = panes.filter(
+    (pane) => pane.workspaceKey !== workspaceKey && scopedThreadKey(pane.threadRef) !== key,
+  );
+  const currentWorkspacePanes = panes.filter((pane) => pane.workspaceKey === workspaceKey);
+  const withoutExisting = currentWorkspacePanes.filter(
+    (pane) => scopedThreadKey(pane.threadRef) !== key,
+  );
+  const nextWorkspacePanes = [...withoutExisting, { workspaceKey, threadRef }].slice(
+    -(MAX_WORKSPACE_CHAT_PANES - 1),
+  );
+  return [...otherWorkspacePanes, ...nextWorkspacePanes];
 }
 
 export function closeWorkspacePane(
@@ -38,7 +49,8 @@ export function closeWorkspacePane(
 
 export const useMultiChatWorkspaceStore = create<MultiChatWorkspaceState>((set) => ({
   panes: [],
-  openPane: (threadRef) => set((state) => ({ panes: openWorkspacePane(state.panes, threadRef) })),
+  openPane: (workspaceKey, threadRef) =>
+    set((state) => ({ panes: openWorkspacePane(state.panes, workspaceKey, threadRef) })),
   closePane: (threadRef) => set((state) => ({ panes: closeWorkspacePane(state.panes, threadRef) })),
   closeAll: () => set({ panes: [] }),
   prunePrimaryPane: (threadRef) =>
