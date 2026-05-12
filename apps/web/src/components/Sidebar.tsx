@@ -4,6 +4,7 @@ import {
   ChevronRightIcon,
   CloudIcon,
   FolderPlusIcon,
+  PanelRightOpenIcon,
   SearchIcon,
   SettingsIcon,
   SquarePenIcon,
@@ -197,6 +198,7 @@ import {
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { SidebarProviderUpdatePill } from "./sidebar/SidebarProviderUpdatePill";
+import { useMultiChatWorkspaceStore } from "../multiChatWorkspaceStore";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -536,6 +538,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     },
     [attemptArchiveThread, threadRef],
   );
+  const handleOpenBesideClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      useMultiChatWorkspaceStore.getState().openPane(threadRef);
+    },
+    [threadRef],
+  );
   const rowButtonRender = useMemo(() => <div role="button" tabIndex={0} />, []);
 
   return (
@@ -606,6 +616,26 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           )}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <div className="pointer-events-none absolute top-1/2 right-7 -translate-y-1/2 opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 group-hover/menu-sub-item:pointer-events-auto group-hover/menu-sub-item:opacity-100 group-focus-within/menu-sub-item:pointer-events-auto group-focus-within/menu-sub-item:opacity-100">
+                  <button
+                    type="button"
+                    data-thread-selection-safe
+                    data-testid={`thread-open-beside-${thread.id}`}
+                    aria-label={`Open ${thread.title} beside current chat`}
+                    className="inline-flex size-5 cursor-pointer items-center justify-center text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                    onPointerDown={stopPropagationOnPointerDown}
+                    onClick={handleOpenBesideClick}
+                  >
+                    <PanelRightOpenIcon className="size-3.5" />
+                  </button>
+                </div>
+              }
+            />
+            <TooltipPopup side="top">Open beside</TooltipPopup>
+          </Tooltip>
           {terminalStatus && (
             <span
               role="img"
@@ -1913,6 +1943,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       const threadWorkspacePath = thread.worktreePath ?? threadProject?.cwd ?? project.cwd ?? null;
       const clicked = await api.contextMenu.show(
         [
+          { id: "open-beside", label: "Open beside current chat" },
           { id: "rename", label: "Rename thread" },
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "Copy Path" },
@@ -1921,6 +1952,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         ],
         position,
       );
+
+      if (clicked === "open-beside") {
+        useMultiChatWorkspaceStore.getState().openPane(threadRef);
+        return;
+      }
 
       if (clicked === "rename") {
         setRenamingThreadKey(threadKey);

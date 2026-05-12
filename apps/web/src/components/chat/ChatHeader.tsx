@@ -9,7 +9,7 @@ import { scopeThreadRef } from "@t3tools/client-runtime";
 import { memo } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
-import { DiffIcon, TerminalSquareIcon } from "lucide-react";
+import { DiffIcon, PanelRightOpenIcon, TerminalSquareIcon, XIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
@@ -17,6 +17,7 @@ import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
 import { usePrimaryEnvironmentId } from "../../environments/primary";
+import { Button } from "../ui/button";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -36,12 +37,17 @@ interface ChatHeaderProps {
   diffToggleShortcutLabel: string | null;
   gitCwd: string | null;
   diffOpen: boolean;
+  canOpenWorkspacePane?: boolean;
+  canCloseWorkspacePane?: boolean;
+  workspacePaneLabel?: string | undefined;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleTerminal: () => void;
   onToggleDiff: () => void;
+  onOpenWorkspacePane?: () => void;
+  onCloseWorkspacePane?: () => void;
 }
 
 export function shouldShowOpenInPicker(input: {
@@ -74,12 +80,17 @@ export const ChatHeader = memo(function ChatHeader({
   diffToggleShortcutLabel,
   gitCwd,
   diffOpen,
+  canOpenWorkspacePane,
+  canCloseWorkspacePane,
+  workspacePaneLabel,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
   onDeleteProjectScript,
   onToggleTerminal,
   onToggleDiff,
+  onOpenWorkspacePane,
+  onCloseWorkspacePane,
 }: ChatHeaderProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const showOpenInPicker = shouldShowOpenInPicker({
@@ -183,6 +194,44 @@ export const ChatHeader = memo(function ChatHeader({
                 : "Toggle diff panel"}
           </TooltipPopup>
         </Tooltip>
+        {canOpenWorkspacePane ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  className="shrink-0"
+                  variant="outline"
+                  size="xs"
+                  aria-label="Pin chat beside"
+                  onClick={onOpenWorkspacePane}
+                >
+                  <PanelRightOpenIcon className="size-3" />
+                </Button>
+              }
+            />
+            <TooltipPopup side="bottom">Pin chat beside</TooltipPopup>
+          </Tooltip>
+        ) : null}
+        {canCloseWorkspacePane ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  className="shrink-0"
+                  variant="outline"
+                  size="xs"
+                  aria-label="Close chat pane"
+                  onClick={onCloseWorkspacePane}
+                >
+                  <XIcon className="size-3" />
+                </Button>
+              }
+            />
+            <TooltipPopup side="bottom">{workspacePaneLabel ?? "Close chat pane"}</TooltipPopup>
+          </Tooltip>
+        ) : null}
       </div>
     </div>
   );

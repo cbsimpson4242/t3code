@@ -339,17 +339,27 @@ type ChatViewProps =
   | {
       environmentId: EnvironmentId;
       threadId: ThreadId;
+      enableGlobalShortcuts?: boolean;
       onDiffPanelOpen?: () => void;
+      onOpenWorkspacePane?: (threadRef: ScopedThreadRef) => void;
+      onCloseWorkspacePane?: (threadRef: ScopedThreadRef) => void;
       reserveTitleBarControlInset?: boolean;
       routeKind: "server";
+      useSharedComposerHandle?: boolean;
+      workspacePaneLabel?: string;
       draftId?: never;
     }
   | {
       environmentId: EnvironmentId;
       threadId: ThreadId;
+      enableGlobalShortcuts?: boolean;
       onDiffPanelOpen?: () => void;
+      onOpenWorkspacePane?: (threadRef: ScopedThreadRef) => void;
+      onCloseWorkspacePane?: (threadRef: ScopedThreadRef) => void;
       reserveTitleBarControlInset?: boolean;
       routeKind: "draft";
+      useSharedComposerHandle?: boolean;
+      workspacePaneLabel?: string;
       draftId: DraftId;
     };
 
@@ -609,8 +619,13 @@ export default function ChatView(props: ChatViewProps) {
     environmentId,
     threadId,
     routeKind,
+    enableGlobalShortcuts = true,
     onDiffPanelOpen,
+    onOpenWorkspacePane,
+    onCloseWorkspacePane,
     reserveTitleBarControlInset = true,
+    useSharedComposerHandle = true,
+    workspacePaneLabel,
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
   const routeThreadRef = useMemo(
@@ -683,7 +698,10 @@ export default function ChatView(props: ChatViewProps) {
   const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
-  const composerRef = useComposerHandleContext() ?? localComposerRef;
+  const sharedComposerRef = useComposerHandleContext();
+  const composerRef = useSharedComposerHandle
+    ? (sharedComposerRef ?? localComposerRef)
+    : localComposerRef;
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
@@ -1718,6 +1736,12 @@ export default function ChatView(props: ChatViewProps) {
       },
     });
   }, [diffOpen, environmentId, isServerThread, navigate, onDiffPanelOpen, threadId]);
+  const openWorkspacePane = useCallback(() => {
+    onOpenWorkspacePane?.(routeThreadRef);
+  }, [onOpenWorkspacePane, routeThreadRef]);
+  const closeWorkspacePane = useCallback(() => {
+    onCloseWorkspacePane?.(routeThreadRef);
+  }, [onCloseWorkspacePane, routeThreadRef]);
 
   const envLocked = Boolean(
     activeThread &&
@@ -2460,6 +2484,10 @@ export default function ChatView(props: ChatViewProps) {
   }, [activeThreadKey, focusComposer, terminalState.terminalOpen]);
 
   useEffect(() => {
+    if (!enableGlobalShortcuts) {
+      return;
+    }
+
     const handler = (event: globalThis.KeyboardEvent) => {
       if (!activeThreadId || useCommandPaletteStore.getState().open || event.defaultPrevented) {
         return;
@@ -2541,6 +2569,7 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadId,
     closeTerminal,
     createNewTerminal,
+    enableGlobalShortcuts,
     setTerminalOpen,
     runProjectScript,
     splitTerminal,
@@ -3531,12 +3560,17 @@ export default function ChatView(props: ChatViewProps) {
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           gitCwd={gitCwd}
           diffOpen={diffOpen}
+          canOpenWorkspacePane={routeKind === "server" && onOpenWorkspacePane !== undefined}
+          canCloseWorkspacePane={onCloseWorkspacePane !== undefined}
+          workspacePaneLabel={workspacePaneLabel}
           onRunProjectScript={runProjectScript}
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
           onToggleTerminal={toggleTerminalVisibility}
           onToggleDiff={onToggleDiff}
+          onOpenWorkspacePane={openWorkspacePane}
+          onCloseWorkspacePane={closeWorkspacePane}
         />
       </header>
 

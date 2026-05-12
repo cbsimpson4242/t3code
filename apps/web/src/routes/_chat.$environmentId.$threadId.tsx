@@ -1,5 +1,7 @@
 import { createFileRoute, retainSearchParams, useNavigate } from "@tanstack/react-router";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import { scopedThreadKey } from "@t3tools/client-runtime";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 
 import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
@@ -23,6 +25,7 @@ import { createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
 import { RightPanelSheet } from "../components/RightPanelSheet";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
+import { useMultiChatWorkspaceStore } from "../multiChatWorkspaceStore";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
 const DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_diff_sidebar_width";
@@ -46,6 +49,81 @@ const LazyDiffPanel = (props: { mode: DiffPanelMode }) => {
         <DiffPanel mode={props.mode} />
       </Suspense>
     </DiffWorkerPoolProvider>
+  );
+};
+
+const chatPaneKey = (threadRef: ScopedThreadRef) => scopedThreadKey(threadRef);
+
+const MultiChatWorkspace = (props: {
+  primaryThreadRef: ScopedThreadRef;
+  onDiffPanelOpen: () => void;
+  reserveTitleBarControlInset?: boolean;
+}) => {
+  const { primaryThreadRef, onDiffPanelOpen, reserveTitleBarControlInset } = props;
+  const panes = useMultiChatWorkspaceStore((state) => state.panes);
+  const openPane = useMultiChatWorkspaceStore((state) => state.openPane);
+  const closePane = useMultiChatWorkspaceStore((state) => state.closePane);
+  const primaryPaneKey = chatPaneKey(primaryThreadRef);
+  const existingPaneKeyList = useStore(
+    useMemo(
+      () => (store) =>
+        panes
+          .flatMap((pane) =>
+            selectThreadExistsByRef(store, pane.threadRef) ? [chatPaneKey(pane.threadRef)] : [],
+          )
+          .join("\n"),
+      [panes],
+    ),
+  );
+  const existingPaneKeys = useMemo(
+    () => new Set(existingPaneKeyList.length > 0 ? existingPaneKeyList.split("\n") : []),
+    [existingPaneKeyList],
+  );
+  const visiblePanes = useMemo(
+    () => [
+      { threadRef: primaryThreadRef, primary: true },
+      ...panes
+        .filter((pane) => {
+          const key = chatPaneKey(pane.threadRef);
+          return key !== primaryPaneKey && existingPaneKeys.has(key);
+        })
+        .map((pane) => ({ threadRef: pane.threadRef, primary: false })),
+    ],
+    [existingPaneKeys, panes, primaryPaneKey, primaryThreadRef],
+  );
+  const multiPane = visiblePanes.length > 1;
+
+  return (
+    <div className="flex h-full min-h-0 min-w-0 overflow-x-auto bg-background">
+      {visiblePanes.map((pane, index) => (
+        <section
+          key={chatPaneKey(pane.threadRef)}
+          className={
+            multiPane
+              ? "flex min-h-0 min-w-[min(34rem,100%)] flex-[1_0_34rem] border-r border-border/80 last:border-r-0"
+              : "flex min-h-0 min-w-0 flex-1"
+          }
+          aria-label={pane.primary ? "Primary chat" : "Secondary chat"}
+        >
+          <ChatView
+            environmentId={pane.threadRef.environmentId}
+            threadId={pane.threadRef.threadId}
+            routeKind="server"
+            enableGlobalShortcuts={pane.primary}
+            onDiffPanelOpen={onDiffPanelOpen}
+            onOpenWorkspacePane={openPane}
+            {...(!pane.primary ? { onCloseWorkspacePane: closePane } : {})}
+            reserveTitleBarControlInset={
+              reserveTitleBarControlInset !== undefined
+                ? reserveTitleBarControlInset && index === visiblePanes.length - 1
+                : index === visiblePanes.length - 1
+            }
+            useSharedComposerHandle={!multiPane}
+            workspacePaneLabel="Close side chat"
+          />
+        </section>
+      ))}
+    </div>
   );
 };
 
@@ -241,12 +319,10 @@ function ChatThreadRouteView() {
     return (
       <>
         <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
-          <ChatView
-            environmentId={threadRef.environmentId}
-            threadId={threadRef.threadId}
+          <MultiChatWorkspace
+            primaryThreadRef={threadRef}
             onDiffPanelOpen={markDiffOpened}
             reserveTitleBarControlInset={!diffOpen}
-            routeKind="server"
           />
         </SidebarInset>
         <DiffPanelInlineSidebar
@@ -262,12 +338,7 @@ function ChatThreadRouteView() {
   return (
     <>
       <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
-        <ChatView
-          environmentId={threadRef.environmentId}
-          threadId={threadRef.threadId}
-          onDiffPanelOpen={markDiffOpened}
-          routeKind="server"
-        />
+        <MultiChatWorkspace primaryThreadRef={threadRef} onDiffPanelOpen={markDiffOpened} />
       </SidebarInset>
       <RightPanelSheet open={diffOpen} onClose={closeDiff}>
         {shouldRenderDiffContent ? <LazyDiffPanel mode="sheet" /> : null}
