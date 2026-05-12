@@ -980,6 +980,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const { isMobile, setOpenMobile } = useSidebar();
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const toggleProject = useUiStateStore((state) => state.toggleProject);
+  const setProjectExpanded = useUiStateStore((state) => state.setProjectExpanded);
   const toggleThreadSelection = useThreadSelectionStore((state) => state.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -1258,15 +1259,58 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       if (useThreadSelectionStore.getState().hasSelection()) {
         clearSelection();
       }
-      toggleProject(project.projectKey);
+      useMultiChatWorkspaceStore.getState().closeAll();
+      setProjectExpanded(project.projectKey, true);
+      const activeThreadInProject =
+        activeRouteThreadKey !== null && orderedProjectThreadKeys.includes(activeRouteThreadKey);
+      if (activeThreadInProject) {
+        return;
+      }
+      const targetThread = visibleProjectThreads[0];
+      if (targetThread) {
+        setSelectionAnchor(
+          scopedThreadKey(scopeThreadRef(targetThread.environmentId, targetThread.id)),
+        );
+        if (isMobile) {
+          setOpenMobile(false);
+        }
+        void router.navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(
+            scopeThreadRef(targetThread.environmentId, targetThread.id),
+          ),
+        });
+        return;
+      }
+      const targetMember = project.memberProjects[0];
+      if (targetMember) {
+        if (isMobile) {
+          setOpenMobile(false);
+        }
+        void handleNewThread(scopeProjectRef(targetMember.environmentId, targetMember.id), {
+          envMode: resolveSidebarNewThreadEnvMode({
+            defaultEnvMode: defaultThreadEnvMode,
+          }),
+        });
+      }
     },
     [
+      activeRouteThreadKey,
       clearSelection,
+      defaultThreadEnvMode,
       dragInProgressRef,
+      handleNewThread,
+      isMobile,
+      orderedProjectThreadKeys,
+      project.memberProjects,
       project.projectKey,
+      router,
+      setOpenMobile,
+      setProjectExpanded,
+      setSelectionAnchor,
       suppressProjectClickAfterDragRef,
       suppressProjectClickForContextMenuRef,
-      toggleProject,
+      visibleProjectThreads,
     ],
   );
 
@@ -1277,9 +1321,18 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       if (dragInProgressRef.current) {
         return;
       }
+      event.currentTarget.click();
+    },
+    [dragInProgressRef],
+  );
+
+  const handleProjectDisclosureClick = useCallback(
+    (event: React.MouseEvent<Element>) => {
+      event.preventDefault();
+      event.stopPropagation();
       toggleProject(project.projectKey);
     },
-    [dragInProgressRef, project.projectKey, toggleProject],
+    [project.projectKey, toggleProject],
   );
 
   const handleProjectButtonPointerDownCapture = useCallback(
@@ -2033,6 +2086,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               aria-hidden="true"
               title={projectStatus.label}
               className={`-ml-0.5 relative inline-flex size-3.5 shrink-0 items-center justify-center ${projectStatus.colorClass}`}
+              onClick={handleProjectDisclosureClick}
             >
               <span className="absolute inset-0 flex items-center justify-center transition-opacity duration-150 group-hover/project-header:opacity-0">
                 <span
@@ -2048,6 +2102,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               className={`-ml-0.5 size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-150 ${
                 projectExpanded ? "rotate-90" : ""
               }`}
+              onClick={handleProjectDisclosureClick}
             />
           )}
           <ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />

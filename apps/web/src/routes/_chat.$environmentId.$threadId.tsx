@@ -1,6 +1,6 @@
 import { createFileRoute, retainSearchParams, useNavigate } from "@tanstack/react-router";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
-import { scopedThreadKey } from "@t3tools/client-runtime";
+import { scopedThreadKey, scopeProjectRef } from "@t3tools/client-runtime";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
 import ChatView from "../components/ChatView";
@@ -19,8 +19,19 @@ import {
   stripDiffSearchParams,
 } from "../diffRouteSearch";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useSettings } from "../hooks/useSettings";
+import {
+  deriveLogicalProjectKeyFromSettings,
+  selectProjectGroupingSettings,
+} from "../logicalProject";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
-import { selectEnvironmentState, selectThreadExistsByRef, useStore } from "../store";
+import {
+  selectEnvironmentState,
+  selectProjectByRef,
+  selectThreadByRef,
+  selectThreadExistsByRef,
+  useStore,
+} from "../store";
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
 import { RightPanelSheet } from "../components/RightPanelSheet";
@@ -54,6 +65,42 @@ const LazyDiffPanel = (props: { mode: DiffPanelMode }) => {
 
 const chatPaneKey = (threadRef: ScopedThreadRef) => scopedThreadKey(threadRef);
 
+const selectVisibleWorkspacePaneKeys = (
+  store: import("../store").AppState,
+  primaryThreadRef: ScopedThreadRef,
+  panes: readonly { threadRef: ScopedThreadRef }[],
+  projectGroupingSettings: ReturnType<typeof selectProjectGroupingSettings>,
+) => {
+  const primaryThread = selectThreadByRef(store, primaryThreadRef);
+  if (!primaryThread) return "";
+  const primaryProject = selectProjectByRef(
+    store,
+    scopeProjectRef(primaryThread.environmentId, primaryThread.projectId),
+  );
+  if (!primaryProject) return "";
+  const primaryProjectKey = deriveLogicalProjectKeyFromSettings(
+    primaryProject,
+    projectGroupingSettings,
+  );
+
+  return panes
+    .flatMap((pane) => {
+      const paneThread = selectThreadByRef(store, pane.threadRef);
+      if (!paneThread) return [];
+      const paneProject = selectProjectByRef(
+        store,
+        scopeProjectRef(paneThread.environmentId, paneThread.projectId),
+      );
+      if (!paneProject) return [];
+      const paneProjectKey = deriveLogicalProjectKeyFromSettings(
+        paneProject,
+        projectGroupingSettings,
+      );
+      return paneProjectKey === primaryProjectKey ? [chatPaneKey(pane.threadRef)] : [];
+    })
+    .join("\n");
+};
+
 const MultiChatWorkspace = (props: {
   primaryThreadRef: ScopedThreadRef;
   onDiffPanelOpen: () => void;
@@ -63,21 +110,18 @@ const MultiChatWorkspace = (props: {
   const panes = useMultiChatWorkspaceStore((state) => state.panes);
   const openPane = useMultiChatWorkspaceStore((state) => state.openPane);
   const closePane = useMultiChatWorkspaceStore((state) => state.closePane);
+  const projectGroupingSettings = useSettings(selectProjectGroupingSettings);
   const primaryPaneKey = chatPaneKey(primaryThreadRef);
-  const existingPaneKeyList = useStore(
+  const visiblePaneKeyList = useStore(
     useMemo(
       () => (store) =>
-        panes
-          .flatMap((pane) =>
-            selectThreadExistsByRef(store, pane.threadRef) ? [chatPaneKey(pane.threadRef)] : [],
-          )
-          .join("\n"),
-      [panes],
+        selectVisibleWorkspacePaneKeys(store, primaryThreadRef, panes, projectGroupingSettings),
+      [panes, primaryThreadRef, projectGroupingSettings],
     ),
   );
   const existingPaneKeys = useMemo(
-    () => new Set(existingPaneKeyList.length > 0 ? existingPaneKeyList.split("\n") : []),
-    [existingPaneKeyList],
+    () => new Set(visiblePaneKeyList.length > 0 ? visiblePaneKeyList.split("\n") : []),
+    [visiblePaneKeyList],
   );
   const visiblePanes = useMemo(
     () => [
