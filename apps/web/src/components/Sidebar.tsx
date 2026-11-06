@@ -254,6 +254,12 @@ import {
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
+import {
+  DEFAULT_SIDEBAR_THREAD_VIEW,
+  SIDEBAR_SIMPLE_GRID_CLASS_NAME,
+  SIDEBAR_THREAD_VIEW_KEY,
+  SidebarThreadView,
+} from "./sidebar/sidebarThreadView";
 import { TooltipProvider } from "./ui/tooltip";
 import { composerDraftHasUserContent, DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
@@ -931,6 +937,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const [threadView, setThreadView] = useLocalStorage(
+    SIDEBAR_THREAD_VIEW_KEY,
+    DEFAULT_SIDEBAR_THREAD_VIEW,
+    SidebarThreadView,
+  );
+  const isSimpleThreadView = threadView === "simple";
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
     settleThread,
@@ -3178,6 +3190,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   </ComboboxPopup>
                 </Combobox>
               }
+              threadView={threadView}
+              onThreadViewChange={setThreadView}
               onNewProject={openAddProjectCommandPalette}
               onNewThread={handleNewThreadClick}
               newThreadDisabled={projects.length === 0}
@@ -3299,7 +3313,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     // controls.
                     role="presentation"
                     className={cn(
-                      "relative flex flex-col gap-px",
+                      "relative gap-px",
+                      isSimpleThreadView ? SIDEBAR_SIMPLE_GRID_CLASS_NAME : "flex flex-col",
                       sidebarListItems.length > 0 && "flex-1",
                       actionSweep !== null && "**:pointer-events-none",
                     )}
@@ -3316,19 +3331,23 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         );
                         const isCard =
                           section === "active" || section === "pinned" || section === "working";
-                        const rowVariant = folderRow
-                          ? folderRowsMultiline
-                            ? "folder-multiline"
-                            : "folder"
-                          : isCard
-                            ? "card"
-                            : "slim";
+                        const rowVariant = isSimpleThreadView
+                          ? "compact"
+                          : folderRow
+                            ? folderRowsMultiline
+                              ? "folder-multiline"
+                              : "folder"
+                            : isCard
+                              ? "card"
+                              : "slim";
                         return (
                           <SortableThreadRow
                             key={threadKey}
                             sortableId={threadKey}
                             contextDrag={isContextDrag}
                             sortableDisabled={
+                              // Drag reordering assumes one column.
+                              isSimpleThreadView ||
                               projectFolders !== null ||
                               renamingThreadKey === threadKey ||
                               !draggableThreadKeys.has(threadKey) ||

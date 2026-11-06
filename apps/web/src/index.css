@@ -577,6 +577,16 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   }
 }
 
+/* Ring around a working thread's logo in the simple sidebar view: a rotating arc, or a still
+   full ring under reduced motion. The animation comes from visible-animate-spin. */
+@utility sidebar-working-ring {
+  background: conic-gradient(from 0deg, transparent 0deg, currentColor 330deg);
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+  @media (prefers-reduced-motion: reduce) {
+    background: currentColor;
+  }
+}
+
 @utility visible-animate-spin {
   animation: var(--animate-spin);
   animation-play-state: var(--visible-animation-state, paused);

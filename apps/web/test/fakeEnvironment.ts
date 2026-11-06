@@ -189,6 +189,8 @@ export interface FakeThread {
   readonly title: string;
   readonly runs: ReadonlyArray<OrchestrationV2Run>;
   readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+  /** Marks the thread's agent as running, which the sidebar shows as working. */
+  readonly status?: "running";
 }
 
 /** A thread of `turns` user prompts, each answered in markdown with a list and inline code. */
@@ -237,9 +239,9 @@ function shellOf(thread: FakeThread): OrchestrationV2ThreadShell {
     createdBy: "user",
     creationSource: "web",
     latestRunId: latest?.id ?? null,
-    activeRunId: null,
+    activeRunId: thread.status === "running" ? (latest?.id ?? null) : null,
     // Idle reads as waiting on the user, which shows a per-second duration in the sidebar.
-    status: latest ? "completed" : "idle",
+    status: thread.status ?? (latest ? "completed" : "idle"),
     pendingRuntimeRequest: null,
     latestVisibleMessage: null,
     latestUserMessageAt: AT,
@@ -320,6 +322,7 @@ let terminalMetadataSubscriber: Queue.Queue<TerminalMetadataStreamEvent> | null 
 let threads: ReadonlyArray<FakeThread> = [];
 let sequence = 1;
 let vcsStatusSubscriber: Queue.Queue<VcsStatusStreamEvent> | null = null;
+let shellSubscriber: Queue.Queue<OrchestrationV2ShellStreamItem> | null = null;
 
 const subscribe = <A>(first: ReadonlyArray<A>, register?: (queue: Queue.Queue<A>) => () => void) =>
   Stream.unwrap(
@@ -343,19 +346,27 @@ const handlers: Record<string, (input: never) => unknown> = {
       };
     }),
   [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () =>
-    subscribe<OrchestrationV2ShellStreamItem>([
-      {
-        kind: "snapshot",
-        snapshot: {
-          schemaVersion: 1,
-          snapshotSequence: sequence,
-          projects: [project],
-          threads: threads.map(shellOf),
-          archivedThreads: [],
+    subscribe<OrchestrationV2ShellStreamItem>(
+      [
+        {
+          kind: "snapshot",
+          snapshot: {
+            schemaVersion: 1,
+            snapshotSequence: sequence,
+            projects: [project],
+            threads: threads.map(shellOf),
+            archivedThreads: [],
+          },
         },
+        { kind: "synchronized" },
+      ],
+      (queue) => {
+        shellSubscriber = queue;
+        return () => {
+          if (shellSubscriber === queue) shellSubscriber = null;
+        };
       },
-      { kind: "synchronized" },
-    ]),
+    ),
   [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: (input: { readonly threadId: ThreadId }) => {
     const thread = threads.find((candidate) => candidate.id === input.threadId);
     if (!thread) return Stream.never;
@@ -502,4 +513,19 @@ export { userItem };
 export async function emitVcsStatus(event: VcsStatusStreamEvent): Promise<void> {
   if (vcsStatusSubscriber === null) throw new Error("No VCS status subscription");
   await Effect.runPromise(Queue.offer(vcsStatusSubscriber, event));
+}
+
+/** Replaces a fixture thread and tells the sidebar, as the server does when a run starts or ends. */
+export async function updateFakeThread(thread: FakeThread): Promise<void> {
+  if (shellSubscriber === null) throw new Error("No shell subscription");
+  threads = threads.map((candidate) => (candidate.id === thread.id ? thread : candidate));
+  sequence += 1;
+  await Effect.runPromise(
+    Queue.offer(shellSubscriber, {
+      kind: "thread.updated",
+      sequence,
+      location: "active",
+      thread: shellOf(thread),
+    }),
+  );
 }

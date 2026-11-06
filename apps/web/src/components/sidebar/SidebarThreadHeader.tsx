@@ -1,4 +1,11 @@
-import { FolderPlusIcon, SearchIcon, SquarePenIcon, XIcon } from "lucide-react";
+import {
+  FolderPlusIcon,
+  LayoutGridIcon,
+  Rows3Icon,
+  SearchIcon,
+  SquarePenIcon,
+  XIcon,
+} from "lucide-react";
 import {
   type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -11,10 +18,13 @@ import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { SidebarInput, SidebarMenuButton } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import type { SidebarThreadView } from "./sidebarThreadView";
 
 export interface SidebarThreadHeaderProps {
   hasProjects: boolean;
   projectScope: ReactNode;
+  threadView: SidebarThreadView;
+  onThreadViewChange: (view: SidebarThreadView) => void;
   onNewProject: () => void;
   onNewThread: (event: ReactMouseEvent) => void;
   newThreadDisabled: boolean;
@@ -34,6 +44,8 @@ export interface SidebarThreadHeaderProps {
 export function SidebarThreadHeader({
   hasProjects,
   projectScope,
+  threadView,
+  onThreadViewChange,
   onNewProject,
   onNewThread,
   newThreadDisabled,
@@ -97,6 +109,20 @@ export function SidebarThreadHeader({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center">
+        <SidebarHeaderIconButton
+          label="Simple thread view"
+          tooltip={
+            threadView === "simple"
+              ? "Simple view: logo and title only. Click for the standard view."
+              : "Standard view. Click for a compact grid of logos and titles."
+          }
+          aria-pressed={threadView === "simple"}
+          data-testid="sidebar-thread-view-toggle"
+          onClick={() => onThreadViewChange(threadView === "simple" ? "standard" : "simple")}
+        >
+          {/* The icon shows the current view; the pressed state and tooltip say what a click does. */}
+          {threadView === "simple" ? <LayoutGridIcon /> : <Rows3Icon />}
+        </SidebarHeaderIconButton>
         {hasProjects ? (
           <>
             {projectScope}

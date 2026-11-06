@@ -114,6 +114,8 @@ import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } f
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { useThreadHasUnsentDraft } from "../../composerDraftStore";
+import { observeVisibleAnimation } from "../../lib/visibleAnimation";
+import { isSidebarThreadStatusAnimated } from "./sidebarThreadView";
 
 // The fields thread rows show. Provider status pushes refresh `checkedAt`,
 // status and auth on every provider; leaving those out keeps each
@@ -536,7 +538,8 @@ type SidebarThreadRowProps = {
   thread: SidebarThreadSummary;
   // "folder" is a one-line row inside a boring sidebar project folder;
   // "folder-multiline" adds the card's branch and PR line under it.
-  variant: "card" | "slim" | "folder" | "folder-multiline";
+  // "compact" is the simple view's square grid tile: only the logo and the title.
+  variant: "card" | "slim" | "folder" | "folder-multiline" | "compact";
   navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
@@ -1015,11 +1018,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     <span
       aria-hidden
       className={cn(
-        "min-w-0 flex-1 text-start text-sm transition-opacity motion-reduce:transition-none",
+        // A tile title sits centered under the logo and wraps to a clamped two lines.
+        variant === "compact"
+          ? "w-full min-w-0 break-words text-center text-xs leading-tight line-clamp-2"
+          : "min-w-0 flex-1 text-start text-sm",
+        "transition-opacity motion-reduce:transition-none",
         shouldRecede ? "font-normal" : "font-medium",
         variant !== "slim"
           ? cn(
-              "truncate",
+              variant !== "compact" && "truncate",
               shouldRecede
                 ? "text-foreground/75 group-hover/sidebar-row:text-foreground group-focus-visible/sidebar-row:text-foreground"
                 : status === "failed" && !isUnread && !isWoke
@@ -1188,6 +1195,82 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       />
     </span>
   ) : null;
+
+  if (variant === "compact") {
+    // A thread whose agent is running; the ring is static under reduced motion.
+    const isWorking = isSidebarThreadStatusAnimated(status);
+    return (
+      <li
+        data-thread-item={threadKey}
+        {...sortableRootProps}
+        {...(fileDropHandlers ?? {})}
+        className={cn(
+          "min-w-0 list-none [content-visibility:auto] [contain-intrinsic-size:auto_--spacing(20)]",
+          sortable?.isDragging && "relative z-20",
+        )}
+      >
+        <Tooltip disabled={sortable?.isDragging}>
+          <TooltipTrigger
+            render={
+              <div
+                ref={rowRef}
+                role="button"
+                tabIndex={0}
+                data-sidebar-row={threadKey}
+                data-sidebar-parent={props.navigationParent}
+                data-sidebar-grid=""
+                data-thread-status={status}
+                aria-label={accessibility.label}
+                aria-current={accessibility.current}
+                data-testid="sidebar-row-compact"
+                aria-busy={isRegeneratingTitle || undefined}
+                className={cn(
+                  rowSurfaceClassName,
+                  "flex aspect-square flex-col items-center justify-start gap-1 px-1 pt-2 pb-1",
+                )}
+                onClick={handleClick}
+                onDoubleClick={handleDoubleClick}
+                onKeyDown={handleKeyDown}
+                onContextMenu={handleContextMenu}
+              />
+            }
+          >
+            {accessibleTitle}
+            <span
+              className={cn(
+                "relative flex size-7 shrink-0 items-center justify-center transition-opacity",
+                !isWorking &&
+                  (!props.isActive || variantAction === "unsettle") &&
+                  "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
+              )}
+            >
+              {isWorking ? (
+                // A rotating arc is a transform animation, so it runs on the compositor; it
+                // pauses offscreen and ends when the thread leaves "working" and the ring unmounts.
+                <span
+                  aria-hidden
+                  ref={observeVisibleAnimation}
+                  data-testid="sidebar-row-working-ring"
+                  className="sidebar-working-ring pointer-events-none absolute inset-0 rounded-full text-info-foreground motion-safe:visible-animate-spin"
+                />
+              ) : null}
+              {props.project ? <ProjectFavicon project={props.project} className="size-5" /> : null}
+            </span>
+            {title}
+            {isRegeneratingTitle ? (
+              <span role="status" className="sr-only">
+                Regenerating title
+              </span>
+            ) : null}
+          </TooltipTrigger>
+          {/* Titles truncate in a narrow cell, so the tooltip is how a full title is read. */}
+          <TooltipPopup side="top" className="max-w-72 break-words">
+            {thread.title}
+          </TooltipPopup>
+        </Tooltip>
+      </li>
+    );
+  }
 
   if (variant !== "card") {
     const multiline = variant === "folder-multiline";

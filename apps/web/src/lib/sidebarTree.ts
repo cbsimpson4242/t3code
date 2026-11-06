@@ -1,5 +1,47 @@
 const ROW = "[data-sidebar-row]";
 
+export interface GridRect {
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+}
+
+const SAME_LINE_TOLERANCE_PX = 2;
+
+/**
+ * Arrow-key target in a list whose rows may sit side by side: left and right step through the
+ * reading order, up and down move to the nearest row, by horizontal centre, on the line above or
+ * below. A full-width row is its own line, so a column never skips a section header.
+ */
+export function resolveGridTarget(
+  rects: ReadonlyArray<GridRect>,
+  index: number,
+  key: "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight",
+): number {
+  if (key === "ArrowRight") return Math.min(index + 1, rects.length - 1);
+  if (key === "ArrowLeft") return Math.max(index - 1, 0);
+  const step = key === "ArrowDown" ? 1 : -1;
+  const current = rects[index];
+  if (!current) return index;
+  const onLine = (rect: GridRect, top: number) =>
+    Math.abs(rect.top - top) <= SAME_LINE_TOLERANCE_PX;
+  let first = index + step;
+  while (rects[first] && onLine(rects[first]!, current.top)) first += step;
+  const lineTop = rects[first]?.top;
+  if (lineTop === undefined) return index;
+  const centre = current.left + current.width / 2;
+  let best = first;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let at = first; rects[at] && onLine(rects[at]!, lineTop); at += step) {
+    const distance = Math.abs(rects[at]!.left + rects[at]!.width / 2 - centre);
+    if (distance < bestDistance) {
+      best = at;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
 /** Ref callback for a sidebar list; installs its keyboard navigation and returns its cleanup. */
 export function attachSidebarTree(element: HTMLElement | null) {
   return element ? installSidebarTree(element) : undefined;
@@ -109,6 +151,20 @@ export function installSidebarTree(root: HTMLElement) {
     const index = rows.indexOf(row);
     if (index < 0) return;
     let target: HTMLElement | undefined;
+    // Grid cells (the simple thread view) navigate in two dimensions.
+    if (
+      row.hasAttribute("data-sidebar-grid") &&
+      (event.key === "ArrowUp" ||
+        event.key === "ArrowDown" ||
+        event.key === "ArrowLeft" ||
+        event.key === "ArrowRight")
+    ) {
+      const rects = rows.map((candidate) => candidate.getBoundingClientRect());
+      event.preventDefault();
+      event.stopPropagation();
+      focusRow(rows[resolveGridTarget(rects, index, event.key)] ?? row);
+      return;
+    }
     switch (event.key) {
       case "ArrowDown":
         target = rows[Math.min(index + 1, rows.length - 1)];
