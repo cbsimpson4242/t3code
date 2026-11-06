@@ -35,6 +35,7 @@ import {
   resolveSidebarDropVerb,
   groupSidebarThreadsByProject,
   hasRunningDelegatedWork,
+  resolveThreadDescendantCompletedAt,
   resolveThreadKeysWithRunningDescendants,
   resolveSidebarFolderDot,
   sidebarFolderExpansionKeys,
@@ -1730,6 +1731,7 @@ describe("delegated work keeps a parent busy", () => {
       readonly parent?: string;
       readonly status: "running" | "idle" | "completed";
       readonly archived?: boolean;
+      readonly completedAt?: string;
     },
   ) => ({
     environmentId: EnvironmentId.make("environment-1"),
@@ -1743,6 +1745,7 @@ describe("delegated work keeps a parent busy", () => {
     archivedAt: input.archived ? "2026-03-09T10:00:00.000Z" : null,
     blockedOnThreadWait: false,
     pendingBackgroundTasks: [],
+    latestRun: input.completedAt === undefined ? null : { completedAt: input.completedAt },
   });
   const keyOf = (id: string) =>
     scopedThreadKey(scopeThreadRef(EnvironmentId.make("environment-1"), ThreadId.make(id)));
@@ -1764,5 +1767,41 @@ describe("delegated work keeps a parent busy", () => {
         shell("old", { parent: "parent", status: "running", archived: true }),
       ]).size,
     ).toBe(0);
+  });
+
+  it("reports when the last delegated thread below each ancestor finished", () => {
+    const completed = resolveThreadDescendantCompletedAt([
+      shell("parent", { status: "idle" }),
+      shell("child", {
+        parent: "parent",
+        status: "completed",
+        completedAt: "2026-03-09T10:05:00.000Z",
+      }),
+      shell("grandchild", {
+        parent: "child",
+        status: "completed",
+        completedAt: "2026-03-09T10:09:00.000Z",
+      }),
+      shell("sibling", {
+        parent: "parent",
+        status: "completed",
+        completedAt: "2026-03-09T10:02:00.000Z",
+      }),
+    ]);
+    expect(completed.get(keyOf("parent"))).toBe("2026-03-09T10:09:00.000Z");
+    expect(completed.get(keyOf("child"))).toBe("2026-03-09T10:09:00.000Z");
+    expect(completed.has(keyOf("grandchild"))).toBe(false);
+  });
+
+  it("does not count a delegated thread that is still busy as finished", () => {
+    const completed = resolveThreadDescendantCompletedAt([
+      shell("parent", { status: "idle" }),
+      shell("child", {
+        parent: "parent",
+        status: "running",
+        completedAt: "2026-03-09T10:01:00.000Z",
+      }),
+    ]);
+    expect(completed.size).toBe(0);
   });
 });

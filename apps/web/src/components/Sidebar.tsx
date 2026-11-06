@@ -214,6 +214,7 @@ import {
   type SidebarListItem,
   type SidebarSection,
   resolveSidebarRowThreadId,
+  resolveThreadDescendantCompletedAt,
   resolveThreadKeysWithRunningDescendants,
 } from "./Sidebar.logic";
 import {
@@ -1140,6 +1141,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         );
   const threads = useQuietThreadShells();
   const threadKeysWithRunningDescendants = resolveThreadKeysWithRunningDescendants(threads);
+  const descendantCompletedAtByThread = resolveThreadDescendantCompletedAt(threads);
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
@@ -3371,6 +3373,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           thread={thread}
                           variant={rowVariant}
                           descendantWorkRunning={threadKeysWithRunningDescendants.has(threadKey)}
+                          descendantCompletedAt={
+                            descendantCompletedAtByThread.get(threadKey) ?? null
+                          }
                           navigationParent={
                             folderRow ??
                             (section === "working" || section === "snoozed" || section === "settled"

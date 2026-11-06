@@ -37,6 +37,7 @@ import {
   CircleCheckIcon,
   CircleDashedIcon,
   CircleDotDashedIcon,
+  CircleSlashIcon,
   ClockIcon,
   GitBranchIcon,
   MessageCircleQuestionIcon,
@@ -116,6 +117,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { useThreadHasUnsentDraft } from "../../composerDraftStore";
 import { observeVisibleAnimation } from "../../lib/visibleAnimation";
+import { SidebarRunDuration, useObservedRunEnd } from "./SidebarRunClock";
+import { resolveFullCompletionMs, resolveSidebarRunTimer } from "./sidebarRunTimer";
 import { isSidebarThreadStatusAnimated } from "./sidebarThreadView";
 
 // The fields thread rows show. Provider status pushes refresh `checkedAt`,
@@ -527,6 +530,7 @@ const TOP_STATUS_ICONS = {
   approval: ShieldQuestionIcon,
   failed: CircleAlertIcon,
   done: CircleCheckIcon,
+  cancelled: CircleSlashIcon,
   woke: AlarmClockIcon,
 } as const;
 
@@ -540,6 +544,9 @@ type SidebarThreadRowProps = {
   // A subagent or delegated task somewhere below this thread is running; see
   // resolveThreadKeysWithRunningDescendants.
   descendantWorkRunning: boolean;
+  // When the last agent delegated from this thread finished; see
+  // resolveThreadDescendantCompletedAt. Null when none has.
+  descendantCompletedAt: string | null;
   // "folder" is a one-line row inside a boring sidebar project folder;
   // "folder-multiline" adds the card's branch and PR line under it.
   // "compact" is the simple view's square grid tile: only the logo and the title.
@@ -713,10 +720,37 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     ? resolveThreadCurrentPullRequestLink(thread.pullRequests)
     : null;
 
-  const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
   const status = resolveSidebarThreadStatus(thread);
   // The parent's own turn may be parked on its agents; it is still busy until they finish.
   const delegatedWorkRunning = props.descendantWorkRunning || hasRunningDelegatedWork(thread);
+  const observedRunEndedAtMs = useObservedRunEnd(
+    isSidebarThreadStatusAnimated(status, delegatedWorkRunning),
+    status === "ready",
+  );
+  // A run is over only when its agents are: the end is the last of the parent's own turn and
+  // everything delegated from it, so a visit between the two does not hide the completion.
+  const fullCompletionMs = resolveFullCompletionMs({
+    thread,
+    descendantCompletedAt: props.descendantCompletedAt,
+    observedEndedAtMs: observedRunEndedAtMs,
+  });
+  const isUnread = hasUnseenCompletion({
+    ...thread,
+    lastVisitedAt,
+    latestRun:
+      thread.latestRun === null || fullCompletionMs === null
+        ? thread.latestRun
+        : { ...thread.latestRun, completedAt: new Date(fullCompletionMs).toISOString() },
+  });
+  // Keep the final result and duration visible until the next run, independently of read state.
+  const runTimer = resolveSidebarRunTimer({
+    thread,
+    status,
+    delegatedWorkRunning,
+    activityStartedAt: resolveWorkingStartedAt(thread),
+    fullCompletionMs,
+    showFinished: true,
+  });
   const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
   const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
   const isWoke =
@@ -785,13 +819,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           icon: "woke" as const,
                           className: "text-warning-foreground",
                         }
-                      : isUnread
+                      : runTimer?.phase === "cancelled"
                         ? {
-                            label: "Done",
-                            icon: "done" as const,
-                            className: "text-success-foreground",
+                            label: "Cancelled",
+                            icon: "cancelled" as const,
+                            className: "text-muted-foreground",
                           }
-                        : null;
+                        : runTimer?.phase === "done" || isUnread
+                          ? {
+                              label: "Done",
+                              icon: "done" as const,
+                              className: "text-success-foreground",
+                            }
+                          : null;
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
@@ -1262,6 +1302,23 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               ) : null}
               {props.project ? <ProjectFavicon project={props.project} className="size-5" /> : null}
             </span>
+            {runTimer !== null ? (
+              // Over the tile's corner, so the logo and title keep their place.
+              <span
+                aria-hidden
+                data-testid="sidebar-row-run-timer"
+                data-run-phase={runTimer.phase}
+                className={cn(
+                  "pointer-events-none absolute top-1 right-1.5 inline-flex items-center gap-0.5 text-3xs font-medium leading-none",
+                  topStatus?.className ?? "text-info-foreground",
+                )}
+              >
+                {topStatus && ["done", "cancelled", "failed"].includes(runTimer.phase) ? (
+                  <TopStatusIcon icon={topStatus.icon} className="size-2.5" />
+                ) : null}
+                <SidebarRunDuration timer={runTimer} />
+              </span>
+            ) : null}
             {title}
             {isRegeneratingTitle ? (
               <span role="status" className="sr-only">
@@ -1389,6 +1446,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       >
                         <TopStatusIcon icon={topStatus.icon} className="size-3" />
                         {topStatus.label}
+                        {runTimer !== null ? (
+                          <span aria-hidden>
+                            <SidebarRunDuration timer={runTimer} />
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : !inFolder &&
+                      (runTimer?.phase === "running" || runTimer?.phase === "delegating") ? (
+                      // Slim rows have no status line, so a running thread's clock takes the time slot.
+                      <span
+                        data-testid="sidebar-row-run-timer"
+                        data-run-phase={runTimer.phase}
+                        className="inline-flex items-center gap-1 text-xs font-medium text-info-foreground"
+                      >
+                        <SidebarRunDuration timer={runTimer} />
                       </span>
                     ) : (
                       <span className="text-xs">
@@ -1581,9 +1653,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                             BackgroundThreadAnnouncer and the open thread's
                             timeline speak status changes instead. */}
                           {topStatus.label}
-                          {status === "working" ? (
+                          {runTimer !== null ? (
                             <span aria-hidden>
-                              <WorkingDuration startedAt={resolveWorkingStartedAt(thread)} />
+                              <SidebarRunDuration timer={runTimer} />
                             </span>
                           ) : status === "waiting" ? (
                             <span aria-hidden>

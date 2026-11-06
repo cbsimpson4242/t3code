@@ -52,6 +52,7 @@ const LAST = { ...threadWithHistory("last", 1), title: "Last thread" };
 
 const rows = () => page.getByTestId("sidebar-row-compact").elements();
 const rings = () => page.getByTestId("sidebar-row-working-ring").elements();
+const timers = () => page.getByTestId("sidebar-row-run-timer").elements();
 
 it("the simple view is a persisted compact grid that animates only working threads", async () => {
   using _environment = installFakeEnvironment([IDLE, WORKING, OTHER, LAST]);
@@ -87,7 +88,12 @@ it("the simple view is a persisted compact grid that animates only working threa
     const title = [IDLE, WORKING, OTHER, LAST].find((thread) =>
       row.textContent?.includes(thread.title),
     )!.title;
-    expect(row.textContent!.replaceAll(title, "")).not.toMatch(/\d|Settle|Done|Waiting|ago/);
+    // The running thread's clock is the one number a cell may carry.
+    const text = row.textContent!.replace(
+      row.querySelector("[data-testid=sidebar-row-run-timer]")?.textContent ?? "",
+      "",
+    );
+    expect(text.replaceAll(title, "")).not.toMatch(/\d|Settle|Done|Waiting|ago/);
   }
 
   // Only the running thread has a ring, and it is animating.
@@ -97,6 +103,15 @@ it("the simple view is a persisted compact grid that animates only working threa
     ring.closest("[data-testid=sidebar-row-compact]")?.getAttribute("data-thread-status"),
   ).toBe("working");
   expect(ring.getAnimations().some((animation) => animation.playState === "running")).toBe(true);
+
+  // Each completed run keeps its result; only the running thread has a live clock.
+  await vi.waitFor(() => expect(timers()).toHaveLength(4));
+  const liveTimers = timers().filter((timer) => timer.getAttribute("data-run-phase") === "running");
+  expect(liveTimers).toHaveLength(1);
+  expect(liveTimers[0]!.closest("[data-testid=sidebar-row-compact]")?.textContent).toContain(
+    WORKING.title,
+  );
+  expect(liveTimers[0]!.textContent).toMatch(/^\d+s$|^\d+m$|^\d+h \d+m$/);
 
   // A truncated title is still readable from its tooltip, and cells are keyboard-navigable.
   const idleRow = rows().find((row) => row.textContent?.includes("Idle thread"))!;
@@ -111,7 +126,12 @@ it("the simple view is a persisted compact grid that animates only working threa
   // The animation ends with the run.
   await updateFakeThread(FINISHED);
   await vi.waitFor(() => expect(rings()).toHaveLength(0));
+  // A finished run's clock is no longer a running one.
+  expect(
+    timers().filter((timer) => timer.getAttribute("data-run-phase") === "running"),
+  ).toHaveLength(0);
   expect(rows()).toHaveLength(4);
+  expect(timers().every((timer) => timer.getAttribute("data-run-phase") === "done")).toBe(true);
 
   // Back to the standard layout.
   await userEvent.click(toggle);

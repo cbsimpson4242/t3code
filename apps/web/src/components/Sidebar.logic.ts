@@ -930,7 +930,55 @@ type DelegationShell = Pick<
 > & {
   delegatedFrom?: { environmentId: EnvironmentId; threadId: ThreadId } | null | undefined;
   pendingBackgroundTasks?: SidebarThreadSummary["pendingBackgroundTasks"] | undefined;
+  latestRun?: Pick<NonNullable<SidebarThreadSummary["latestRun"]>, "completedAt"> | null;
 };
+
+function delegationKey(environmentId: EnvironmentId, threadId: ThreadId): string {
+  return scopedThreadKey(scopeThreadRef(environmentId, threadId));
+}
+
+/** Each delegated or subagent thread's own key and its parent's, with whether it is busy. */
+function indexDelegatedThreads(threads: ReadonlyArray<DelegationShell>) {
+  const children: Array<{
+    key: string;
+    parentKey: string;
+    busy: boolean;
+    thread: DelegationShell;
+  }> = [];
+  for (const thread of threads) {
+    const parentKey = thread.delegatedFrom
+      ? delegationKey(thread.delegatedFrom.environmentId, thread.delegatedFrom.threadId)
+      : thread.lineage.relationshipToParent === "subagent" && thread.lineage.parentThreadId !== null
+        ? delegationKey(thread.environmentId, thread.lineage.parentThreadId)
+        : null;
+    if (parentKey === null) continue;
+    const runtimeActive =
+      thread.runtime !== null &&
+      ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status);
+    children.push({
+      key: delegationKey(thread.environmentId, thread.id),
+      parentKey,
+      busy: thread.archivedAt === null && (runtimeActive || hasRunningDelegatedWork(thread)),
+      thread,
+    });
+  }
+  return { children, parentKeyByChild: new Map(children.map((c) => [c.key, c.parentKey])) };
+}
+
+/** Keys from `childKey` up through every listed ancestor, nearest first, cycle-safe. */
+function ancestorKeys(childKey: string, parentKeyByChild: ReadonlyMap<string, string>): string[] {
+  const visited = new Set<string>([childKey]);
+  const ancestors: string[] = [];
+  for (
+    let parent = parentKeyByChild.get(childKey);
+    parent !== undefined && !visited.has(parent);
+    parent = parentKeyByChild.get(parent)
+  ) {
+    visited.add(parent);
+    ancestors.push(parent);
+  }
+  return ancestors;
+}
 
 /**
  * Keys of the threads with a running subagent or delegated task anywhere below them. Child
@@ -940,39 +988,35 @@ type DelegationShell = Pick<
 export function resolveThreadKeysWithRunningDescendants(
   threads: ReadonlyArray<DelegationShell>,
 ): ReadonlySet<string> {
-  const keyOf = (environmentId: EnvironmentId, threadId: ThreadId) =>
-    scopedThreadKey(scopeThreadRef(environmentId, threadId));
-  const parentKeyByChild = new Map<string, string>();
-  const busyChildren: string[] = [];
-  for (const thread of threads) {
-    const parentKey = thread.delegatedFrom
-      ? keyOf(thread.delegatedFrom.environmentId, thread.delegatedFrom.threadId)
-      : thread.lineage.relationshipToParent === "subagent" && thread.lineage.parentThreadId !== null
-        ? keyOf(thread.environmentId, thread.lineage.parentThreadId)
-        : null;
-    if (parentKey === null) continue;
-    const key = keyOf(thread.environmentId, thread.id);
-    parentKeyByChild.set(key, parentKey);
-    const runtimeActive =
-      thread.runtime !== null &&
-      ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status);
-    if (thread.archivedAt === null && (runtimeActive || hasRunningDelegatedWork(thread))) {
-      busyChildren.push(key);
-    }
-  }
+  const { children, parentKeyByChild } = indexDelegatedThreads(threads);
   const result = new Set<string>();
-  for (const child of busyChildren) {
-    const visited = new Set<string>([child]);
-    for (
-      let parent = parentKeyByChild.get(child);
-      parent !== undefined && !visited.has(parent);
-      parent = parentKeyByChild.get(parent)
-    ) {
-      visited.add(parent);
-      result.add(parent);
-    }
+  for (const child of children) {
+    if (!child.busy) continue;
+    for (const ancestor of ancestorKeys(child.key, parentKeyByChild)) result.add(ancestor);
   }
   return result;
+}
+
+/**
+ * For each thread with delegated threads below it, when the last of them finished its run.
+ * A parent is only done once its agents are, so this is the end of the whole run when it
+ * falls after the parent's own turn. Threads still busy have not finished and add nothing.
+ */
+export function resolveThreadDescendantCompletedAt(
+  threads: ReadonlyArray<DelegationShell>,
+): ReadonlyMap<string, string> {
+  const { children, parentKeyByChild } = indexDelegatedThreads(threads);
+  const latestMs = new Map<string, { ms: number; iso: string }>();
+  for (const child of children) {
+    const iso = child.thread.latestRun?.completedAt;
+    const ms = iso == null || child.busy ? Number.NaN : Date.parse(iso);
+    if (iso == null || Number.isNaN(ms)) continue;
+    for (const ancestor of ancestorKeys(child.key, parentKeyByChild)) {
+      const known = latestMs.get(ancestor);
+      if (known === undefined || known.ms < ms) latestMs.set(ancestor, { ms, iso });
+    }
+  }
+  return new Map([...latestMs].map(([key, { iso }]) => [key, iso]));
 }
 
 /**

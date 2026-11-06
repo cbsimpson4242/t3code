@@ -242,6 +242,10 @@ function shellOf(thread: FakeThread): OrchestrationV2ThreadShell {
     activeRunId: thread.status === "running" ? (latest?.id ?? null) : null,
     // Idle reads as waiting on the user, which shows a per-second duration in the sidebar.
     status: thread.status ?? (latest ? "completed" : "idle"),
+    // A running thread reports when its run began, which the sidebar clock counts from.
+    ...(thread.status === "running"
+      ? { activityRunStartedAt: AT, latestRunStartedAt: AT, latestRunCompletedAt: null }
+      : {}),
     pendingRuntimeRequest: null,
     latestVisibleMessage: null,
     latestUserMessageAt: AT,
