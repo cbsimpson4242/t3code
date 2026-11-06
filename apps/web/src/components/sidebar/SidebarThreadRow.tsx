@@ -538,7 +538,7 @@ type SidebarThreadRowProps = {
   thread: SidebarThreadSummary;
   // "folder" is a one-line row inside a boring sidebar project folder;
   // "folder-multiline" adds the card's branch and PR line under it.
-  // "compact" is the simple view's grid cell: only the logo and the title.
+  // "compact" is the simple view's square grid tile: only the logo and the title.
   variant: "card" | "slim" | "folder" | "folder-multiline" | "compact";
   navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
@@ -1018,11 +1018,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     <span
       aria-hidden
       className={cn(
-        "min-w-0 flex-1 text-start text-sm transition-opacity motion-reduce:transition-none",
+        // A tile title sits centered under the logo and wraps to a clamped two lines.
+        variant === "compact"
+          ? "w-full min-w-0 break-words text-center text-xs leading-tight line-clamp-2"
+          : "min-w-0 flex-1 text-start text-sm",
+        "transition-opacity motion-reduce:transition-none",
         shouldRecede ? "font-normal" : "font-medium",
         variant !== "slim"
           ? cn(
-              "truncate",
+              variant !== "compact" && "truncate",
               shouldRecede
                 ? "text-foreground/75 group-hover/sidebar-row:text-foreground group-focus-visible/sidebar-row:text-foreground"
                 : status === "failed" && !isUnread && !isWoke
@@ -1201,7 +1205,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         {...sortableRootProps}
         {...(fileDropHandlers ?? {})}
         className={cn(
-          "min-w-0 list-none [content-visibility:auto] [contain-intrinsic-size:auto_--spacing(8)]",
+          "min-w-0 list-none [content-visibility:auto] [contain-intrinsic-size:auto_--spacing(20)]",
           sortable?.isDragging && "relative z-20",
         )}
       >
@@ -1220,7 +1224,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 aria-current={accessibility.current}
                 data-testid="sidebar-row-compact"
                 aria-busy={isRegeneratingTitle || undefined}
-                className={cn(rowSurfaceClassName, "flex h-8 items-center gap-1.5 px-1.5")}
+                className={cn(
+                  rowSurfaceClassName,
+                  "flex aspect-square flex-col items-center justify-start gap-1 px-1 pt-2 pb-1",
+                )}
                 onClick={handleClick}
                 onDoubleClick={handleDoubleClick}
                 onKeyDown={handleKeyDown}
@@ -1231,7 +1238,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             {accessibleTitle}
             <span
               className={cn(
-                "relative flex size-5 shrink-0 items-center justify-center transition-opacity",
+                "relative flex size-7 shrink-0 items-center justify-center transition-opacity",
                 !isWorking &&
                   (!props.isActive || variantAction === "unsettle") &&
                   "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
@@ -1247,7 +1254,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   className="sidebar-working-ring pointer-events-none absolute inset-0 rounded-full text-info-foreground motion-safe:visible-animate-spin"
                 />
               ) : null}
-              {props.project ? <ProjectFavicon project={props.project} className="size-4" /> : null}
+              {props.project ? <ProjectFavicon project={props.project} className="size-5" /> : null}
             </span>
             {title}
             {isRegeneratingTitle ? (
