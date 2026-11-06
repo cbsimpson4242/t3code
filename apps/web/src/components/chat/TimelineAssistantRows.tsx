@@ -1,3 +1,5 @@
+import { parseVoiceMessageContent } from "@t3tools/shared/voiceMessage";
+import { VoiceMessagePlayer } from "./VoiceMessagePlayer";
 import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
 import { type RunId } from "@t3tools/contracts";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
@@ -32,7 +34,10 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
     row.projectedItem?.item.id,
   );
   const text = liveText ?? row.message.text;
-  const messageText = text || (row.message.streaming ? "" : "(empty response)");
+  const voiceContent = parseVoiceMessageContent(text);
+  const messageText =
+    voiceContent.text ||
+    (voiceContent.audioPaths.length || row.message.streaming ? "" : "(empty response)");
 
   return (
     <>
@@ -60,6 +65,17 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
             />
           </AssistantCitationSource>
         </div>
+        {ctx.threadRef
+          ? voiceContent.audioPaths.map((path, index) => (
+              <VoiceMessagePlayer
+                key={path}
+                id={`${ctx.activeThreadEnvironmentId}:${row.message.id}:${index}`}
+                environmentId={ctx.activeThreadEnvironmentId}
+                threadId={ctx.threadRef!.threadId}
+                path={path}
+              />
+            ))
+          : null}
         {ctx.onOpenTurnDiff ? (
           <AssistantChangedFilesSection
             turnSummary={row.assistantTurnDiffSummary}
