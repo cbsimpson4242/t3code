@@ -79,6 +79,7 @@ import {
   hasUnseenCompletion,
   resolveSidebarRowAccessibility,
   type SidebarDropVerb,
+  hasRunningDelegatedWork,
   resolveSidebarThreadStatus,
   resolveThreadLastVisitedAt,
   shouldRecedeSidebarThread,
@@ -536,6 +537,9 @@ function TopStatusIcon(props: { icon: keyof typeof TOP_STATUS_ICONS; className: 
 
 type SidebarThreadRowProps = {
   thread: SidebarThreadSummary;
+  // A subagent or delegated task somewhere below this thread is running; see
+  // resolveThreadKeysWithRunningDescendants.
+  descendantWorkRunning: boolean;
   // "folder" is a one-line row inside a boring sidebar project folder;
   // "folder-multiline" adds the card's branch and PR line under it.
   // "compact" is the simple view's square grid tile: only the logo and the title.
@@ -711,6 +715,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
 
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
   const status = resolveSidebarThreadStatus(thread);
+  // The parent's own turn may be parked on its agents; it is still busy until they finish.
+  const delegatedWorkRunning = props.descendantWorkRunning || hasRunningDelegatedWork(thread);
   const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
   const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
   const isWoke =
@@ -731,55 +737,61 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           icon: "working" as const,
           className: "text-info-foreground",
         }
-      : status === "waiting"
+      : isSidebarThreadStatusAnimated(status, delegatedWorkRunning)
         ? {
-            label: "Waiting",
-            icon: "waiting" as const,
-            className: "text-muted-foreground",
+            label: "Delegating",
+            icon: "working" as const,
+            className: "text-info-foreground",
           }
-        : status === "approval"
+        : status === "waiting"
           ? {
-              label: "Approval",
-              icon: "approval" as const,
-              className: "text-warning-foreground",
+              label: "Waiting",
+              icon: "waiting" as const,
+              className: "text-muted-foreground",
             }
-          : status === "input"
+          : status === "approval"
             ? {
-                label: "Input",
-                icon: "input" as const,
-                className: "text-indigo-600 dark:text-indigo-300",
+                label: "Approval",
+                icon: "approval" as const,
+                className: "text-warning-foreground",
               }
-            : status === "request"
+            : status === "input"
               ? {
-                  label: "Request",
-                  icon: "request" as const,
-                  className: "text-guest-foreground",
+                  label: "Input",
+                  icon: "input" as const,
+                  className: "text-indigo-600 dark:text-indigo-300",
                 }
-              : status === "limited"
+              : status === "request"
                 ? {
-                    label: "Limited",
-                    icon: "failed" as const,
-                    className: "text-warning-foreground",
+                    label: "Request",
+                    icon: "request" as const,
+                    className: "text-guest-foreground",
                   }
-                : status === "failed"
+                : status === "limited"
                   ? {
-                      label: "Failed",
+                      label: "Limited",
                       icon: "failed" as const,
-                      className: "text-error-foreground",
+                      className: "text-warning-foreground",
                     }
-                  : isWoke
+                  : status === "failed"
                     ? {
-                        label: "Woke",
-                        icon: "woke" as const,
-                        className: "text-warning-foreground",
+                        label: "Failed",
+                        icon: "failed" as const,
+                        className: "text-error-foreground",
                       }
-                    : isUnread
+                    : isWoke
                       ? {
-                          label: "Done",
-                          icon: "done" as const,
-                          className: "text-success-foreground",
+                          label: "Woke",
+                          icon: "woke" as const,
+                          className: "text-warning-foreground",
                         }
-                      : null;
+                      : isUnread
+                        ? {
+                            label: "Done",
+                            icon: "done" as const,
+                            className: "text-success-foreground",
+                          }
+                        : null;
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
@@ -950,7 +962,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
     variantAction === "unsettle" &&
       !props.isActive &&
-      "[&:not(:hover):not(:focus-within)_*]:text-secondary-label",
+      // Settled rows mute their text; the project logo keeps its own colour.
+      "[&:not(:hover):not(:focus-within)_*:not([data-thread-logo],[data-thread-logo]_*)]:text-secondary-label",
     props.isActive
       ? "bg-sidebar-row-active text-sidebar-foreground light:ring-1 light:ring-inset light:ring-sidebar-border/70"
       : isSelected || props.sweepAction !== null
@@ -960,9 +973,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           : shouldRecede
             ? "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
             : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
-    shouldRecede &&
-      status === "working" &&
-      "opacity-70 transition-opacity hover:opacity-100 focus-within:opacity-100 motion-reduce:transition-none",
     isFileDragOver && "ring-1 ring-inset ring-primary/70",
     isFileDragOver && !props.isActive && !isSelected && "bg-sidebar-row-hover",
     props.sortable?.isDragging &&
@@ -1198,7 +1208,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
 
   if (variant === "compact") {
     // A thread whose agent is running; the ring is static under reduced motion.
-    const isWorking = isSidebarThreadStatusAnimated(status);
+    const isWorking = isSidebarThreadStatusAnimated(status, delegatedWorkRunning);
     return (
       <li
         data-thread-item={threadKey}
@@ -1237,12 +1247,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           >
             {accessibleTitle}
             <span
-              className={cn(
-                "relative flex size-7 shrink-0 items-center justify-center transition-opacity",
-                !isWorking &&
-                  (!props.isActive || variantAction === "unsettle") &&
-                  "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
-              )}
+              data-thread-logo=""
+              className="relative flex size-7 shrink-0 items-center justify-center"
             >
               {isWorking ? (
                 // A rotating arc is a transform animation, so it runs on the compositor; it
@@ -1318,13 +1324,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             <div className={multiline ? "flex h-6 min-w-0 items-center gap-2.5" : "contents"}>
               {accessibleTitle}
               {inFolder ? null : (
-                <span
-                  className={cn(
-                    "flex shrink-0 items-center transition-opacity",
-                    (!props.isActive || variantAction === "unsettle") &&
-                      "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
-                  )}
-                >
+                <span data-thread-logo="" className="flex shrink-0 items-center">
                   {props.project ? (
                     <ProjectFavicon project={props.project} className="size-4" />
                   ) : null}
@@ -1513,7 +1513,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               {draftIndicator}
               {props.project ? (
-                <ProjectFavicon project={props.project} className="size-4 shrink-0" />
+                <span data-thread-logo="" className="contents">
+                  <ProjectFavicon project={props.project} className="size-4 shrink-0" />
+                </span>
               ) : null}
               {/* Left of the status slot, the pin would slide when hover swaps the
                 label for the wider row controls. */}
@@ -1796,16 +1798,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
           }
         >
           {props.project ? (
-            <ProjectFavicon
-              project={props.project}
-              className={cn(
-                "size-4 shrink-0 transition-opacity",
-                props.isSettled &&
-                  !props.isRouteActive &&
-                  !props.isHighlighted &&
-                  "opacity-40 grayscale group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
-              )}
-            />
+            <ProjectFavicon project={props.project} className="size-4 shrink-0" />
           ) : null}
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="flex min-w-0 items-center gap-2.5">

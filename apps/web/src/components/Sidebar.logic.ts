@@ -909,6 +909,73 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
 }
 
 /**
+ * Agents this thread handed work to are still running: its own turn is parked on them
+ * (a thread wait or blocking delegate), or its turn ended while a subagent it started keeps
+ * going. Ordinary waiting for the user, and other background tasks, are not delegated work.
+ */
+export function hasRunningDelegatedWork(
+  thread: Pick<SidebarThreadStatusInput, "runtime" | "blockedOnThreadWait"> & {
+    pendingBackgroundTasks?: SidebarThreadSummary["pendingBackgroundTasks"] | undefined;
+  },
+): boolean {
+  return (
+    (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) ||
+    (thread.pendingBackgroundTasks ?? []).some((task) => task.kind === "subagent")
+  );
+}
+
+type DelegationShell = Pick<
+  SidebarThreadSummary,
+  "environmentId" | "id" | "lineage" | "runtime" | "archivedAt" | "blockedOnThreadWait"
+> & {
+  delegatedFrom?: { environmentId: EnvironmentId; threadId: ThreadId } | null | undefined;
+  pendingBackgroundTasks?: SidebarThreadSummary["pendingBackgroundTasks"] | undefined;
+};
+
+/**
+ * Keys of the threads with a running subagent or delegated task anywhere below them. Child
+ * threads have no row of their own, so their activity shows on the nearest listed parent;
+ * a grandchild's work reaches its ancestors through every link of the chain.
+ */
+export function resolveThreadKeysWithRunningDescendants(
+  threads: ReadonlyArray<DelegationShell>,
+): ReadonlySet<string> {
+  const keyOf = (environmentId: EnvironmentId, threadId: ThreadId) =>
+    scopedThreadKey(scopeThreadRef(environmentId, threadId));
+  const parentKeyByChild = new Map<string, string>();
+  const busyChildren: string[] = [];
+  for (const thread of threads) {
+    const parentKey = thread.delegatedFrom
+      ? keyOf(thread.delegatedFrom.environmentId, thread.delegatedFrom.threadId)
+      : thread.lineage.relationshipToParent === "subagent" && thread.lineage.parentThreadId !== null
+        ? keyOf(thread.environmentId, thread.lineage.parentThreadId)
+        : null;
+    if (parentKey === null) continue;
+    const key = keyOf(thread.environmentId, thread.id);
+    parentKeyByChild.set(key, parentKey);
+    const runtimeActive =
+      thread.runtime !== null &&
+      ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status);
+    if (thread.archivedAt === null && (runtimeActive || hasRunningDelegatedWork(thread))) {
+      busyChildren.push(key);
+    }
+  }
+  const result = new Set<string>();
+  for (const child of busyChildren) {
+    const visited = new Set<string>([child]);
+    for (
+      let parent = parentKeyByChild.get(child);
+      parent !== undefined && !visited.has(parent);
+      parent = parentKeyByChild.get(parent)
+    ) {
+      visited.add(parent);
+      result.add(parent);
+    }
+  }
+  return result;
+}
+
+/**
  * The dot on a closed boring-sidebar folder: the most urgent state among its
  * hidden threads. Waiting threads stay quiet, like their rows.
  */

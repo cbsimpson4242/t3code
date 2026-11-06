@@ -16,7 +16,16 @@ export const DEFAULT_SIDEBAR_THREAD_VIEW: SidebarThreadView = "standard";
 export const SIDEBAR_SIMPLE_GRID_CLASS_NAME =
   "grid content-start gap-1 grid-cols-[repeat(auto-fill,minmax(4.75rem,1fr))] [&>*:not([data-thread-item])]:col-span-full";
 
-/** Only a thread whose agent is actually running animates; waiting and idle threads stay still. */
-export function isSidebarThreadStatusAnimated(status: SidebarThreadStatus): boolean {
-  return status === "working";
+/**
+ * A thread whose agent is running animates. A parent parked on delegated agents, or whose
+ * subagents outlive its turn, is still busy; waiting for the user alone and attention
+ * states (approval, input, failure) stay still.
+ */
+export function isSidebarThreadStatusAnimated(
+  status: SidebarThreadStatus,
+  delegatedWorkRunning = false,
+): boolean {
+  return (
+    status === "working" || (delegatedWorkRunning && (status === "waiting" || status === "ready"))
+  );
 }
