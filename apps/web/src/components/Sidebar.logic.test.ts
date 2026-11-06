@@ -34,10 +34,13 @@ import {
   type SidebarSection,
   resolveSidebarDropVerb,
   groupSidebarThreadsByProject,
+  hasRunningDelegatedWork,
+  resolveThreadKeysWithRunningDescendants,
   resolveSidebarFolderDot,
   sidebarFolderExpansionKeys,
 } from "./Sidebar.logic";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { isSidebarThreadStatusAnimated } from "./sidebar/sidebarThreadView";
 import {
   sortActiveThreadsByOrderKey,
   sortPinnedThreadsByOrderKey,
@@ -1655,5 +1658,111 @@ describe("shouldCreateNewThreadInCurrentProject", () => {
     expect(shouldCreateNewThreadInCurrentProject(false, 1, 3)).toBe(true);
     expect(shouldCreateNewThreadInCurrentProject(false, 0, 0)).toBe(true);
     expect(shouldCreateNewThreadInCurrentProject(true, 2, 2)).toBe(true);
+  });
+});
+
+describe("delegated work keeps a parent busy", () => {
+  const runtime = (status: "running" | "idle" | "completed") => ({
+    status,
+    providerName: "Codex",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    activeRunId: status === "running" ? ("turn-1" as never) : null,
+    lastError: null,
+    updatedAt: "2026-03-09T10:00:00.000Z",
+  });
+  const noStatusRequests = {
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    pendingSubagentRequest: null,
+    pendingGuestMessageCount: 0,
+  };
+  const subagentTask = { taskId: "sub-1", kind: "subagent" as const };
+
+  it("counts a parent parked on a thread wait, and stops when the wait ends", () => {
+    const parked = {
+      ...noStatusRequests,
+      runtime: runtime("running"),
+      blockedOnThreadWait: true,
+      pendingBackgroundTasks: [],
+    };
+    expect(resolveSidebarThreadStatus(parked)).toBe("waiting");
+    expect(hasRunningDelegatedWork(parked)).toBe(true);
+    expect(isSidebarThreadStatusAnimated("waiting", hasRunningDelegatedWork(parked))).toBe(true);
+
+    const finished = { ...parked, blockedOnThreadWait: false, runtime: runtime("idle") };
+    expect(hasRunningDelegatedWork(finished)).toBe(false);
+    expect(isSidebarThreadStatusAnimated("waiting", hasRunningDelegatedWork(finished))).toBe(false);
+  });
+
+  it("counts a subagent that outlives the parent's turn but not other background tasks", () => {
+    const idle = {
+      ...noStatusRequests,
+      runtime: runtime("idle"),
+      blockedOnThreadWait: false,
+    };
+    expect(hasRunningDelegatedWork({ ...idle, pendingBackgroundTasks: [subagentTask] })).toBe(true);
+    expect(
+      hasRunningDelegatedWork({
+        ...idle,
+        pendingBackgroundTasks: [
+          { taskId: "cmd", kind: "command", awaited: true },
+          { taskId: "bg", kind: "background_task" },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("does not animate a thread that is only waiting for the user", () => {
+    const idle = {
+      ...noStatusRequests,
+      runtime: runtime("idle"),
+      blockedOnThreadWait: false,
+      pendingBackgroundTasks: [],
+    };
+    expect(resolveSidebarThreadStatus(idle)).toBe("waiting");
+    expect(hasRunningDelegatedWork(idle)).toBe(false);
+    expect(isSidebarThreadStatusAnimated("waiting", hasRunningDelegatedWork(idle))).toBe(false);
+  });
+
+  const shell = (
+    id: string,
+    input: {
+      readonly parent?: string;
+      readonly status: "running" | "idle" | "completed";
+      readonly archived?: boolean;
+    },
+  ) => ({
+    environmentId: EnvironmentId.make("environment-1"),
+    id: ThreadId.make(id),
+    lineage: {
+      parentThreadId: input.parent === undefined ? null : ThreadId.make(input.parent),
+      relationshipToParent: input.parent === undefined ? null : ("subagent" as const),
+      rootThreadId: ThreadId.make("parent"),
+    },
+    runtime: runtime(input.status),
+    archivedAt: input.archived ? "2026-03-09T10:00:00.000Z" : null,
+    blockedOnThreadWait: false,
+    pendingBackgroundTasks: [],
+  });
+  const keyOf = (id: string) =>
+    scopedThreadKey(scopeThreadRef(EnvironmentId.make("environment-1"), ThreadId.make(id)));
+
+  it("marks every ancestor of a running child, including through nested delegation", () => {
+    const keys = resolveThreadKeysWithRunningDescendants([
+      shell("parent", { status: "idle" }),
+      shell("child", { parent: "parent", status: "idle" }),
+      shell("grandchild", { parent: "child", status: "running" }),
+    ]);
+    expect([...keys].toSorted()).toEqual([keyOf("child"), keyOf("parent")].toSorted());
+  });
+
+  it("marks nothing once the delegated threads have finished or are archived", () => {
+    expect(
+      resolveThreadKeysWithRunningDescendants([
+        shell("parent", { status: "idle" }),
+        shell("child", { parent: "parent", status: "completed" }),
+        shell("old", { parent: "parent", status: "running", archived: true }),
+      ]).size,
+    ).toBe(0);
   });
 });

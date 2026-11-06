@@ -31,6 +31,24 @@ describe("isSidebarThreadStatusAnimated", () => {
       "failed",
       "ready",
     ] satisfies SidebarThreadStatus[];
-    expect(statuses.filter(isSidebarThreadStatusAnimated)).toEqual(["working"]);
+    expect(statuses.filter((status) => isSidebarThreadStatusAnimated(status))).toEqual(["working"]);
+  });
+
+  it("also animates a waiting or ready parent while delegated work runs, never an attention state", () => {
+    const statuses = [
+      "working",
+      "waiting",
+      "approval",
+      "input",
+      "request",
+      "limited",
+      "failed",
+      "ready",
+    ] satisfies SidebarThreadStatus[];
+    expect(statuses.filter((status) => isSidebarThreadStatusAnimated(status, true))).toEqual([
+      "working",
+      "waiting",
+      "ready",
+    ]);
   });
 });
