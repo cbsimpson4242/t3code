@@ -551,6 +551,8 @@ function ThreadNavigationSidebarPane(
             thread={thread}
             variant={item.item.variant}
             hasQueuedMessages={item.hasQueuedMessages}
+            descendantWorkRunning={item.descendantWorkRunning}
+            descendantCompletedAt={item.descendantCompletedAt}
             snoozed={item.item.snoozed}
             pinned={item.item.pinned}
             wokeAt={item.item.wokeAt}

@@ -13,6 +13,7 @@ import {
   threadListV2LayoutTime,
 } from "./threadListV2";
 import { computeThreadMoveAvailability } from "./threadOrder";
+import { resolveThreadDescendantWork } from "./threadRunTimer";
 
 /**
  * Screens' select handlers read the content-only key set; a fresh one per list rebuild gave
@@ -209,6 +210,8 @@ export function useThreadListV2(input: {
         (searchQuery.length === 0 || pendingTask.title.toLocaleLowerCase().includes(searchQuery)),
     );
   }, [input.projectRefs, input.searchQuery, input.pendingTasks, input.environmentId]);
+  // Child threads have no row of their own: their work and finish show on the listed parent.
+  const descendantWork = useMemo(() => resolveThreadDescendantWork(threads), [threads]);
   const items = useMemo(
     () =>
       buildThreadListV2ListItems({
@@ -227,6 +230,7 @@ export function useThreadListV2(input: {
         snoozeEnvironmentIds: input.snoozeEnvironmentIds,
         queuedThreadKeys: input.queuedThreadKeys,
         moveAvailability,
+        descendantWork,
         shelfPreferencesLoading: !input.shelfPreferencesLoaded,
       }),
     [
@@ -239,6 +243,7 @@ export function useThreadListV2(input: {
       input.snoozeEnvironmentIds,
       input.queuedThreadKeys,
       moveAvailability,
+      descendantWork,
       input.shelfPreferencesLoaded,
     ],
   );

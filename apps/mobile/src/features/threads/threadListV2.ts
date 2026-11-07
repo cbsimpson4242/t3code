@@ -33,6 +33,7 @@ import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
 import type { ThreadMoveAvailability } from "./threadOrder";
+import { descendantWorkOf, type ThreadDescendantWork } from "./threadRunTimer";
 
 import { relativeTime } from "../../lib/time";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
@@ -349,6 +350,10 @@ export interface ThreadListV2ThreadListItem {
   readonly showTrailingDivider: boolean;
   /** Include queued state in item equality; outbox writes do not update thread shells. */
   readonly hasQueuedMessages: boolean;
+  /** An agent delegated from this thread, directly or deeper, is still running. */
+  readonly descendantWorkRunning: boolean;
+  /** When the last agent delegated from this thread finished; null when none has. */
+  readonly descendantCompletedAt: string | null;
   readonly canMoveUp: boolean;
   readonly canMoveDown: boolean;
 }
@@ -425,6 +430,8 @@ export function threadListV2ListItemsAreEqual(
         previous.snoozePresetMinute === item.snoozePresetMinute &&
         previous.showTrailingDivider === item.showTrailingDivider &&
         previous.hasQueuedMessages === item.hasQueuedMessages &&
+        previous.descendantWorkRunning === item.descendantWorkRunning &&
+        previous.descendantCompletedAt === item.descendantCompletedAt &&
         previous.canMoveUp === item.canMoveUp &&
         previous.canMoveDown === item.canMoveDown
       );
@@ -496,6 +503,8 @@ export function buildThreadListV2ListItems(input: {
   readonly snoozeEnvironmentIds?: ReadonlySet<EnvironmentId>;
   readonly queuedThreadKeys?: ReadonlySet<string>;
   readonly moveAvailability?: ReadonlyMap<string, ThreadMoveAvailability>;
+  /** See resolveThreadDescendantWork; rows with delegated agents below them run one clock. */
+  readonly descendantWork?: ReadonlyMap<string, ThreadDescendantWork>;
   readonly shelfPreferencesLoading?: boolean;
 }): ThreadListV2ListItem[] {
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
@@ -516,6 +525,7 @@ export function buildThreadListV2ListItems(input: {
       item.variant === "card"
         ? input.moveAvailability?.get(`${item.thread.environmentId}:${item.thread.id}`)
         : undefined;
+    const descendantWork = descendantWorkOf(input.descendantWork, item.thread);
     return {
       type: "v2-thread",
       key: `v2-thread:${item.thread.environmentId}:${item.thread.id}`,
@@ -526,6 +536,8 @@ export function buildThreadListV2ListItems(input: {
       showTrailingDivider: false,
       hasQueuedMessages:
         queuedThreadKeys?.has(`${item.thread.environmentId}:${item.thread.id}`) === true,
+      descendantWorkRunning: descendantWork.running,
+      descendantCompletedAt: descendantWork.completedAt,
       canMoveUp: move?.canMoveUp === true,
       canMoveDown: move?.canMoveDown === true,
     };
