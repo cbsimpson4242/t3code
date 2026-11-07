@@ -1,6 +1,9 @@
 import { memo, useEffect, useState, type ReactNode } from "react";
 import { AccessibilityInfo, Animated, AppState, Easing, View } from "react-native";
 
+// 40dp keeps the project logo visible and fits inside the 108dp three-up tile.
+const THREAD_WORKING_RING_SIZE = 40;
+
 export const ThreadWorkingRing = memo(function ThreadWorkingRing(props: {
   readonly busy: boolean;
   readonly children: ReactNode;
@@ -44,16 +47,23 @@ export const ThreadWorkingRing = memo(function ThreadWorkingRing(props: {
     };
   }, [props.busy, reduced, active, rotation]);
   return (
-    <View style={{ width: 52, height: 52, alignItems: "center", justifyContent: "center" }}>
+    <View
+      style={{
+        width: THREAD_WORKING_RING_SIZE,
+        height: THREAD_WORKING_RING_SIZE,
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
       {props.busy ? (
         <Animated.View
           pointerEvents="none"
           testID="thread-working-ring"
           style={{
             position: "absolute",
-            width: 52,
-            height: 52,
-            borderRadius: 26,
+            width: THREAD_WORKING_RING_SIZE,
+            height: THREAD_WORKING_RING_SIZE,
+            borderRadius: THREAD_WORKING_RING_SIZE / 2,
             borderWidth: 2,
             borderColor: "#38bdf8",
             borderRightColor: "transparent",

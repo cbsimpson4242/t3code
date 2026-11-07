@@ -4,6 +4,7 @@ import { Pressable, View } from "react-native";
 import type { ReactNode } from "react";
 import { AppText } from "../../components/ui/AppText";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { SIMPLE_THREAD_GRID_GAP, SIMPLE_THREAD_GRID_PADDING } from "./simple-thread-grid";
 
 export function useSimpleThreadView() {
   const result = useAtomValue(mobilePreferencesAtom);
@@ -41,7 +42,14 @@ export function SimpleGridCells<T extends { readonly key: string }>(props: {
   readonly render: (item: T) => ReactNode;
 }) {
   return (
-    <View style={{ flexDirection: "row", paddingHorizontal: 8, gap: 8, marginBottom: 8 }}>
+    <View
+      style={{
+        flexDirection: "row",
+        paddingHorizontal: SIMPLE_THREAD_GRID_PADDING,
+        gap: SIMPLE_THREAD_GRID_GAP,
+        marginBottom: 8,
+      }}
+    >
       {props.cells.map((cell) => (
         <View key={cell.key} style={{ flex: 1, minWidth: 0 }}>
           {props.render(cell)}

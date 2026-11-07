@@ -2,14 +2,21 @@ import { describe, expect, it } from "vite-plus/test";
 import { groupSimpleThreadRows, simpleThreadColumns } from "./simple-thread-grid";
 
 describe("Simple thread grid", () => {
-  it("fits phones, narrow sidebars, and tablets, accounting for large type", () => {
+  it("fits three phone columns, then fewer for narrow widths and large type", () => {
     expect(simpleThreadColumns(0)).toBe(1);
-    expect(simpleThreadColumns(280)).toBe(1);
-    expect(simpleThreadColumns(360)).toBe(2);
-    expect(simpleThreadColumns(430)).toBe(2);
-    expect(simpleThreadColumns(900)).toBe(5);
+    expect(simpleThreadColumns(220)).toBe(1);
+    expect(simpleThreadColumns(280)).toBe(2);
+    expect(simpleThreadColumns(360)).toBe(3);
+    expect(simpleThreadColumns(390)).toBe(3);
+    expect(simpleThreadColumns(411)).toBe(3);
+    expect(simpleThreadColumns(430)).toBe(3);
+    expect(simpleThreadColumns(448)).toBe(3);
+    expect(simpleThreadColumns(456)).toBe(4);
+    expect(simpleThreadColumns(900)).toBe(6);
     expect(simpleThreadColumns(1600)).toBe(6);
-    expect(simpleThreadColumns(360, 1.5)).toBe(1);
+    expect(simpleThreadColumns(430, 0.85)).toBe(3);
+    expect(simpleThreadColumns(360, 1.5)).toBe(2);
+    expect(simpleThreadColumns(360, 2)).toBe(1);
   });
   it("preserves shelf boundaries, row order, and non-thread actions", () => {
     const item = (type: string, key: string) => ({ type, key });

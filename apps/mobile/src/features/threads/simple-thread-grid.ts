@@ -1,5 +1,20 @@
+/** Inset on each side of a Simple row. SimpleGridCells uses the same value. */
+export const SIMPLE_THREAD_GRID_PADDING = 6;
+/** Space between Simple tiles. The column count subtracts this, so the two stay paired. */
+export const SIMPLE_THREAD_GRID_GAP = 4;
+// 108dp is the smallest square that still holds the compact ring, two title lines, and status.
+// Phones from 360dp through 448dp stay at three columns; four starts at 456dp.
+const SIMPLE_THREAD_MIN_TILE_WIDTH = 108;
+const SIMPLE_THREAD_MAX_COLUMNS = 6;
+
 export function simpleThreadColumns(width: number, fontScale = 1): number {
-  return Math.max(1, Math.min(6, Math.floor((width - 16) / (148 * Math.max(1, fontScale)))));
+  const tile = SIMPLE_THREAD_MIN_TILE_WIDTH * Math.max(1, fontScale);
+  const inner =
+    (Number.isFinite(width) ? width : 0) - SIMPLE_THREAD_GRID_PADDING * 2 + SIMPLE_THREAD_GRID_GAP;
+  return Math.max(
+    1,
+    Math.min(SIMPLE_THREAD_MAX_COLUMNS, Math.floor(inner / (tile + SIMPLE_THREAD_GRID_GAP))),
+  );
 }
 
 export type SimpleGridRow<T> = {
