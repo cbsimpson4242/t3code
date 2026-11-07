@@ -1,3 +1,13 @@
+import {
+  groupSimpleThreadRows,
+  simpleThreadColumns,
+  type SimpleGridRow,
+} from "../threads/simple-thread-grid";
+import {
+  SimpleGridCells,
+  ThreadViewToggle,
+  useSimpleThreadView,
+} from "../threads/simple-thread-view";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
@@ -241,6 +251,9 @@ function renderHomeScrollView(props: ScrollViewProps) {
 }
 
 export function HomeScreen(props: HomeScreenProps) {
+  const simpleView = useSimpleThreadView() && Platform.OS === "android";
+  const { fontScale: gridFontScale } = useWindowDimensions();
+  const [gridWidth, setGridWidth] = useState(0);
   const usesNativeWorkspaceColumns = useNativeWorkspaceColumnsSupported();
   const workspace = useWorkspaceTabs();
   const [initialScrollOffset] = useState(() => workspace?.getScrollOffset("threads") ?? 0);
@@ -273,6 +286,14 @@ export function HomeScreen(props: HomeScreenProps) {
           minimumPadding: 0,
         })
       : 0;
+  const gridColumns = simpleThreadColumns(
+    gridWidth -
+      androidListGutter * 2 -
+      (primaryColumn ? 16 : 0) -
+      (contentSideInsets?.left ?? 0) -
+      (contentSideInsets?.right ?? 0),
+    gridFontScale,
+  );
   const iosBottomClearance = Math.max(
     columnMetrics?.safeArea.bottom ?? insets.bottom,
     24,
@@ -569,6 +590,7 @@ export function HomeScreen(props: HomeScreenProps) {
     const thread = item.item.thread;
     return (
       <ThreadListV2Row
+        simple={simpleView}
         pane={primaryColumn ? "sidebar" : "screen"}
         selected={scopedThreadKey(thread.environmentId, thread.id) === selectedThreadKey}
         fullSwipeWidth={fullSwipeWidth}
@@ -639,10 +661,12 @@ export function HomeScreen(props: HomeScreenProps) {
       />
     );
   };
-  const v2KeyExtractor = (item: ThreadListV2ListItem) => item.key;
+  const v2KeyExtractor = (item: ThreadListV2ListItem | SimpleGridRow<ThreadListV2ListItem>) =>
+    item.key;
 
   // extraData changes invalidate every visible row; put the minute clock on items to limit updates.
   const v2ExtraData = {
+    simpleView,
     activeNewTask,
     projectByKey,
     projectTitleByProjectKey: v2ProjectTitleByProjectKey,
@@ -718,6 +742,7 @@ export function HomeScreen(props: HomeScreenProps) {
 
   const v2ListHeader = (
     <>
+      {Platform.OS === "android" ? <ThreadViewToggle /> : null}
       {listHeader}
       {Platform.OS === "ios" && workspace ? (
         <ThreadListFilters
@@ -779,15 +804,19 @@ export function HomeScreen(props: HomeScreenProps) {
   return (
     <View className={containerClassName}>
       <View
+        onLayout={(event) => setGridWidth(event.nativeEvent.layout.width)}
         className={
           Platform.OS === "android"
             ? "flex-1 overflow-hidden rounded-t-[28px] bg-screen"
             : cn("flex-1", contentBackground)
         }
       >
-        <SwipeableScrollGateProvider enabled={swipeEnabled} activation={swipeRowActivation}>
+        <SwipeableScrollGateProvider
+          enabled={swipeEnabled}
+          activation={simpleView ? undefined : swipeRowActivation}
+        >
           <GestureDetector gesture={homeScrollGesture}>
-            <AnimatedLegendList
+            <AnimatedLegendList<ThreadListV2ListItem | SimpleGridRow<ThreadListV2ListItem>>
               itemLayoutAnimation={primaryColumn ? THREAD_SIDEBAR_ROW_LAYOUT : undefined}
               ref={listRef}
               onLoad={() => activateVisibleRows(threadListV2Items)}
@@ -795,11 +824,29 @@ export function HomeScreen(props: HomeScreenProps) {
               onTouchEnd={(event) => trackListTouches(event, false)}
               onTouchCancel={(event) => trackListTouches(event, false)}
               renderScrollComponent={Platform.OS === "ios" ? renderHomeScrollView : undefined}
-              data={threadListV2Items}
-              renderItem={renderV2Item}
+              data={
+                simpleView
+                  ? groupSimpleThreadRows(threadListV2Items, gridColumns)
+                  : threadListV2Items
+              }
+              renderItem={({ item }) =>
+                item.type === "simple-grid" ? (
+                  <SimpleGridCells
+                    cells={item.cells}
+                    columns={gridColumns}
+                    render={(cell) => renderV2Item({ item: cell })}
+                  />
+                ) : (
+                  renderV2Item({ item })
+                )
+              }
               keyExtractor={v2KeyExtractor}
               getItemType={(item) => item.type}
-              itemsAreEqual={threadListV2ListItemsAreEqual}
+              itemsAreEqual={(a, b) =>
+                a.type === "simple-grid" || b.type === "simple-grid"
+                  ? a === b
+                  : threadListV2ListItemsAreEqual(a, b)
+              }
               estimatedItemSize={ESTIMATED_THREAD_LIST_V2_ROW_HEIGHT}
               drawDistance={THREAD_LIST_V2_DRAW_DISTANCE}
               recycleItems

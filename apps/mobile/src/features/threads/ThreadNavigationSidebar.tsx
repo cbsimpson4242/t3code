@@ -1,3 +1,9 @@
+import {
+  groupSimpleThreadRows,
+  simpleThreadColumns,
+  type SimpleGridRow,
+} from "./simple-thread-grid";
+import { SimpleGridCells, ThreadViewToggle, useSimpleThreadView } from "./simple-thread-view";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
@@ -20,7 +26,7 @@ import type { MenuAction } from "@react-native-menu/menu";
 import { useAtomValue } from "@effect/atom-react";
 import { useMemo, useRef, useState } from "react";
 import type { LayoutChangeEvent, TextInputInstance } from "react-native";
-import { Platform, StyleSheet, TextInput, View } from "react-native";
+import { Platform, StyleSheet, TextInput, useWindowDimensions, View } from "react-native";
 import { GestureDetector, useNativeGesture } from "react-native-gesture-handler";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { FLOATING_TABS } from "../workspace/floating-workspace-tabs";
@@ -146,6 +152,10 @@ function NativeSidebarContainer(props: ThreadNavigationSidebarProps) {
 function ThreadNavigationSidebarPane(
   props: ThreadNavigationSidebarProps & { readonly nativeChrome: boolean },
 ) {
+  const simpleView = useSimpleThreadView() && Platform.OS === "android";
+  const { fontScale: gridFontScale } = useWindowDimensions();
+  const [gridWidth, setGridWidth] = useState(0);
+  const gridColumns = simpleThreadColumns(gridWidth, gridFontScale);
   const floatingTabsEnabled = useAndroidFloatingTabs();
   const { themeVariables: materialTheme } = useAppearancePreferences();
   const drawerColor = materialTheme["--color-drawer"];
@@ -468,6 +478,7 @@ function ThreadNavigationSidebarPane(
   });
   // Recycle equality needs project/search data for titles and favicons; keep the minute clock on items to limit updates.
   const listExtraData = {
+    simpleView,
     activeNewTask,
     selectedThreadKey: props.selectedThreadKey ?? "",
     projectByKey,
@@ -547,6 +558,7 @@ function ThreadNavigationSidebarPane(
         const scopeKey = scopedProjectKey(thread.environmentId, thread.projectId);
         return (
           <ThreadListV2Row
+            simple={simpleView}
             onNewThreadOnBranch={props.onNewThreadOnBranch}
             thread={thread}
             variant={item.item.variant}
@@ -737,17 +749,31 @@ function ThreadNavigationSidebarPane(
         <View className="flex-1">
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
             <GestureDetector gesture={sidebarScrollGesture}>
-              <AnimatedLegendList
+              <AnimatedLegendList<SidebarListItem | SimpleGridRow<SidebarListItem>>
                 renderScrollComponent={Platform.OS === "ios" ? NativeScrollView : undefined}
                 itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
-                data={listItems}
+                data={simpleView ? groupSimpleThreadRows(listItems, gridColumns) : listItems}
                 drawDistance={500}
                 estimatedItemSize={64}
                 extraData={listExtraData}
                 getItemType={(item) => item.type}
-                itemsAreEqual={sidebarItemsAreEqual}
+                itemsAreEqual={(a, b) =>
+                  a.type === "simple-grid" || b.type === "simple-grid"
+                    ? a === b
+                    : sidebarItemsAreEqual(a, b)
+                }
                 keyExtractor={(item) => item.key}
-                renderItem={renderListItem}
+                renderItem={({ item }) =>
+                  item.type === "simple-grid" ? (
+                    <SimpleGridCells
+                      cells={item.cells}
+                      columns={gridColumns}
+                      render={(cell) => renderListItem({ item: cell })}
+                    />
+                  ) : (
+                    renderListItem({ item })
+                  )
+                }
                 automaticallyAdjustsScrollIndicatorInsets={NATIVE_LIQUID_GLASS_SUPPORTED}
                 contentInsetAdjustmentBehavior={
                   NATIVE_LIQUID_GLASS_SUPPORTED ? "automatic" : "never"
@@ -767,6 +793,7 @@ function ThreadNavigationSidebarPane(
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
+                ListHeaderComponent={Platform.OS === "android" ? <ThreadViewToggle /> : undefined}
                 ListEmptyComponent={listEmpty}
               />
             </GestureDetector>
@@ -787,6 +814,7 @@ function ThreadNavigationSidebarPane(
       style={Platform.OS === "android" ? undefined : { width: props.width }}
     >
       <View
+        onLayout={(event) => setGridWidth(event.nativeEvent.layout.width)}
         className="flex-1"
         style={
           Platform.OS === "android"
@@ -808,16 +836,30 @@ function ThreadNavigationSidebarPane(
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
             <GestureDetector gesture={sidebarScrollGesture}>
               {/* oxlint-disable-next-line t3code/require-registered-list-scroll -- Only the non-native workspace layout (Android and the fallback) renders this sidebar, which has no native header to register with. */}
-              <AnimatedLegendList
+              <AnimatedLegendList<SidebarListItem | SimpleGridRow<SidebarListItem>>
                 itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
-                data={listItems}
+                data={simpleView ? groupSimpleThreadRows(listItems, gridColumns) : listItems}
                 drawDistance={500}
                 estimatedItemSize={64}
                 extraData={listExtraData}
                 getItemType={(item) => item.type}
-                itemsAreEqual={sidebarItemsAreEqual}
+                itemsAreEqual={(a, b) =>
+                  a.type === "simple-grid" || b.type === "simple-grid"
+                    ? a === b
+                    : sidebarItemsAreEqual(a, b)
+                }
                 keyExtractor={(item) => item.key}
-                renderItem={renderListItem}
+                renderItem={({ item }) =>
+                  item.type === "simple-grid" ? (
+                    <SimpleGridCells
+                      cells={item.cells}
+                      columns={gridColumns}
+                      render={(cell) => renderListItem({ item: cell })}
+                    />
+                  ) : (
+                    renderListItem({ item })
+                  )
+                }
                 contentContainerStyle={[
                   styles.threadListContent,
                   Platform.OS === "android" ? { paddingHorizontal: 0 } : null,
@@ -838,6 +880,7 @@ function ThreadNavigationSidebarPane(
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
+                ListHeaderComponent={Platform.OS === "android" ? <ThreadViewToggle /> : undefined}
                 ListEmptyComponent={listEmpty}
               />
             </GestureDetector>
