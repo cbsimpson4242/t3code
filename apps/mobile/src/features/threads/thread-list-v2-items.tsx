@@ -1,3 +1,4 @@
+import { ThreadWorkingRing } from "./ThreadWorkingRing";
 import * as Dialog from "../../components/ui/Dialog";
 import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import {
@@ -638,6 +639,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
 export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly thread: EnvironmentThreadShell;
   readonly variant: "card" | "slim";
+  readonly simple?: boolean;
   readonly hasQueuedMessages?: boolean;
   /** An agent delegated from this thread is still running; see resolveThreadDescendantWork. */
   readonly descendantWorkRunning?: boolean;
@@ -1404,8 +1406,58 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     cardContent
   );
 
+  const simpleContent = (
+    <View
+      className="items-center justify-center gap-2 rounded-2xl border border-border bg-surface"
+      style={{
+        aspectRatio: 1,
+        padding: 8,
+        borderColor: selected ? "#38bdf8" : theme["--color-border"],
+        borderRadius: 16,
+        borderWidth: selected ? 2 : 1,
+      }}
+    >
+      <ThreadWorkingRing busy={isThreadRunBusy(status, delegatedWorkRunning)}>
+        <ProjectFavicon
+          environmentId={thread.environmentId}
+          size={36}
+          projectTitle={props.project?.title ?? "Scratch"}
+          projectIcon={props.project?.projectIcon}
+          faviconPath={props.project?.faviconPath}
+          workspaceRoot={props.project?.workspaceRoot}
+        />
+      </ThreadWorkingRing>
+      <Text
+        className="text-sm font-t3-medium text-foreground"
+        numberOfLines={2}
+        style={{ textAlign: "center", alignSelf: "stretch" }}
+      >
+        {thread.title}
+      </Text>
+      <Text
+        className={cn("text-xs tabular-nums", statusLabel?.className ?? "text-foreground-muted")}
+        numberOfLines={1}
+      >
+        {statusLabel?.label ?? (snoozedRow ? "Snoozed" : timeLabel)}
+        {runTimer ? <ThreadRunDuration timer={runTimer} /> : null}
+      </Text>
+    </View>
+  );
   const rowContent = (close: () => void) =>
-    variant === "card" ? (
+    props.simple ? (
+      <RowPressable
+        accessibilityRole="button"
+        accessibilityLabel={rowAccessibilityLabel}
+        accessibilityHint="Opens the thread. Long press for thread actions."
+        accessibilityState={{ selected }}
+        onPress={() => {
+          close();
+          selectThread();
+        }}
+      >
+        {simpleContent}
+      </RowPressable>
+    ) : variant === "card" ? (
       <RowPressable
         key={`${thread.environmentId}:${thread.id}`}
         interactionClassName={rowAppearance.interactionClassName}
