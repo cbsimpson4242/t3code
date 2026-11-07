@@ -76,6 +76,8 @@ import {
   type ThreadListV2Status,
 } from "./threadListV2";
 import { QueuedMessageIcon } from "./queued-message-icon";
+import { ThreadRunDuration, useObservedRunEnd } from "./thread-run-clock";
+import { hasRunningDelegatedWork, isThreadRunBusy, resolveThreadRowRun } from "./threadRunTimer";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -137,6 +139,19 @@ const DONE_STATUS_LABEL: StatusLabel = {
   icon: "checkmark.circle",
   className: "text-adaptive-emerald-700-300",
   iconTintClassName: "accent-adaptive-emerald-700-300",
+};
+const CANCELLED_STATUS_LABEL: StatusLabel = {
+  label: "Cancelled",
+  icon: "slash.circle",
+  className: "text-foreground-muted",
+  iconTintClassName: "accent-foreground-muted",
+};
+// A parent parked on, or past its turn but still waiting for, agents it started.
+const DELEGATING_STATUS_LABEL: StatusLabel = {
+  label: "Delegating",
+  icon: "circle.dashed",
+  className: "text-adaptive-sky-600-400",
+  iconTintClassName: "accent-adaptive-sky-600-400",
 };
 
 function ThreadListV2Duration(props: { readonly startedAt: string | null }) {
@@ -624,6 +639,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly thread: EnvironmentThreadShell;
   readonly variant: "card" | "slim";
   readonly hasQueuedMessages?: boolean;
+  /** An agent delegated from this thread is still running; see resolveThreadDescendantWork. */
+  readonly descendantWorkRunning?: boolean;
+  /** When the last agent delegated from this thread finished; null when none has. */
+  readonly descendantCompletedAt?: string | null;
   readonly snoozed?: boolean;
   readonly pinned?: boolean;
   readonly wokeAt: string | null;
@@ -736,14 +755,51 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const rowAppearance = getThreadListV2RowAppearance(theme, sidebarPane, selected);
 
   const status = resolveThreadListV2Status(thread);
-  const isUnread = status === "ready" && threadHasUnseenCompletion(thread);
-  const workingLabel = STATUS_LABEL_BY_STATUS[status];
+  // The parent's own turn may be parked on its agents; it is still busy until they finish.
+  const delegatedWorkRunning =
+    props.descendantWorkRunning === true || hasRunningDelegatedWork(thread);
+  const rowKey = `${thread.environmentId}:${thread.id}`;
+  const observedRunEndedAtMs = useObservedRunEnd(
+    rowKey,
+    isThreadRunBusy(status, delegatedWorkRunning),
+    status === "ready",
+  );
+  // A run is over only when its agents are: the end is the last of the parent's own turn and
+  // everything delegated from it, so a visit between the two does not hide the completion.
+  // The final result and duration stay visible until the next run, independently of read state.
+  const { fullCompletionMs, timer: runTimer } = resolveThreadRowRun({
+    thread,
+    status,
+    delegatedWorkRunning,
+    descendantCompletedAt: props.descendantCompletedAt ?? null,
+    observedEndedAtMs: observedRunEndedAtMs,
+    activityStartedAt: resolveThreadWorkingStartedAt(thread),
+  });
+  const isUnread =
+    status === "ready" &&
+    threadHasUnseenCompletion({
+      ...thread,
+      latestRun:
+        thread.latestRun === null || fullCompletionMs === null
+          ? thread.latestRun
+          : { ...thread.latestRun, completedAt: new Date(fullCompletionMs).toISOString() },
+    });
+  const workingLabel =
+    runTimer?.phase === "delegating" ? DELEGATING_STATUS_LABEL : STATUS_LABEL_BY_STATUS[status];
   const showsWoke = status === "ready" && props.wokeAt !== null;
   const statusLabel =
     (status === "working" && workingLabel !== undefined && thread.goal?.status === "active"
       ? { ...workingLabel, label: "Goal" }
-      : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
-  const recede = shouldRecedeThreadRow({ status, selected });
+      : workingLabel) ??
+    (runTimer?.phase === "cancelled"
+      ? CANCELLED_STATUS_LABEL
+      : runTimer?.phase === "done" || isUnread
+        ? DONE_STATUS_LABEL
+        : undefined);
+  const recede = shouldRecedeThreadRow({
+    status: runTimer?.phase === "delegating" ? "working" : status,
+    selected,
+  });
   const isRegeneratingTitle = thread.titleRegeneration != null;
   const rowAccessibilityLabel = `${thread.title}${props.hasQueuedMessages ? ", messages queued to send" : ""}${isRegeneratingTitle ? ", regenerating title" : ""}`;
   const timeLabel = props.timeLabel;
@@ -1196,13 +1252,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               <Text
                 className={cn(
                   "text-xs font-t3-bold",
-                  (status === "working" || status === "waiting") && "tabular-nums",
+                  (runTimer !== null || status === "waiting") && "tabular-nums",
                   selected ? selectedThreadRowColors.foregroundClassName : statusLabel.className,
                 )}
               >
                 {statusLabel.label}
-                {status === "working" ? (
-                  <ThreadListV2Duration startedAt={resolveThreadWorkingStartedAt(thread)} />
+                {runTimer !== null ? (
+                  <ThreadRunDuration timer={runTimer} />
                 ) : status === "waiting" ? (
                   <ThreadListV2Duration startedAt={thread.latestRun?.completedAt ?? null} />
                 ) : null}
