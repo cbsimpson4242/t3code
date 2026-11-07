@@ -122,6 +122,7 @@ export interface Preferences {
     readonly provider: ProviderInstanceId;
     readonly model: string;
   }>;
+  readonly threadListView?: "standard" | "simple";
   readonly threadListSettledShelfExpanded?: boolean;
   readonly threadListSnoozedShelfExpanded?: boolean;
   readonly threadListWorkingShelfExpanded?: boolean;
@@ -167,7 +168,7 @@ export class MobilePreferencesStore extends Context.Service<
   }
 >()("@t3tools/mobile/persistence/MobilePreferencesStore") {}
 
-function sanitizePreferences(parsed: Preferences): Preferences {
+export function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
     navigationTabOrder?: readonly string[];
     hiddenNavigationTabs?: readonly string[];
@@ -199,6 +200,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     useLastProjectForNewThreads?: boolean;
     lastThreadProject?: typeof ThreadProject.Type;
     modelFavorites?: Preferences["modelFavorites"];
+    threadListView?: "standard" | "simple";
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
     threadListWorkingShelfExpanded?: boolean;
@@ -340,6 +342,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
         typeof favorite.model === "string" &&
         favorite.model.trim().length > 0,
     );
+  }
+  if (parsed.threadListView === "standard" || parsed.threadListView === "simple") {
+    preferences.threadListView = parsed.threadListView;
   }
   if (typeof parsed.threadListSettledShelfExpanded === "boolean") {
     preferences.threadListSettledShelfExpanded = parsed.threadListSettledShelfExpanded;

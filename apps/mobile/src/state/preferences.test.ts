@@ -196,3 +196,20 @@ describe("mobile preferences state", () => {
     }),
   );
 });
+
+describe("thread list view persistence", () => {
+  it("round trips Simple and List while ignoring invalid stored values", () => {
+    expect(MobilePreferences.sanitizePreferences({ threadListView: "simple" }).threadListView).toBe(
+      "simple",
+    );
+    expect(
+      MobilePreferences.sanitizePreferences({ threadListView: "standard" }).threadListView,
+    ).toBe("standard");
+    expect(
+      MobilePreferences.sanitizePreferences({
+        threadListView: "bad",
+      } as unknown as MobilePreferences.Preferences).threadListView,
+    ).toBeUndefined();
+    expect(MobilePreferences.sanitizePreferences({}).threadListView).toBeUndefined();
+  });
+});
