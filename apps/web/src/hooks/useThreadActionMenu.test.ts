@@ -21,6 +21,11 @@ const state = vi.hoisted(() => ({
   granted: new Set<string>(),
   effects: [] as string[],
   completed: deferred<void>(),
+  shell: {
+    branch: "main" as string | null,
+    worktreePath: null as string | null,
+  },
+  newThreadCalls: [] as Array<readonly [unknown, unknown]>,
   show: vi.fn<
     (
       items: ReadonlyArray<ContextMenuItem<ThreadActionMenuId>>,
@@ -54,8 +59,8 @@ vi.mock("../state/entities", () => ({
     environmentId: "secondary",
     projectId: "project",
     title: "Thread",
-    branch: "main",
-    worktreePath: null,
+    branch: state.shell.branch,
+    worktreePath: state.shell.worktreePath,
     runtime: null,
     latestRun: null,
   }),
@@ -108,7 +113,10 @@ vi.mock("./useCopyToClipboard", () => ({
   useCopyToClipboard: () => ({ copyToClipboard: () => recordEffect("copy") }),
 }));
 vi.mock("./useHandleNewThread", () => ({
-  useNewThreadHandler: () => async () => recordEffect("draft"),
+  useNewThreadHandler: () => async (projectRef: unknown, options: unknown) => {
+    state.newThreadCalls.push([projectRef, options]);
+    recordEffect("draft");
+  },
 }));
 vi.mock("./useSettings", () => ({
   useClientSettings: (select: (settings: unknown) => unknown) =>
@@ -162,6 +170,9 @@ beforeEach(() => {
   state.granted = new Set(["primary"]);
   state.effects = [];
   state.completed = deferred<void>();
+  state.shell.branch = "main";
+  state.shell.worktreePath = null;
+  state.newThreadCalls = [];
   state.show.mockReset().mockResolvedValue(null);
 });
 
@@ -192,5 +203,51 @@ describe("thread menu permissions", () => {
     expect(items[0]?.disabled).not.toBe(true);
     expect(state.effects).toEqual(["find"]);
     expect(onFind).toHaveBeenCalledExactlyOnceWith(target);
+  });
+
+  it("starts a main-checkout thread without the source worktree", async () => {
+    state.shell.branch = "feature/menu";
+    state.shell.worktreePath = "/repo/.t3/worktrees/feature-menu";
+    state.show.mockResolvedValue("new-thread-on-main");
+    createMenu().openMenu(position);
+    await state.completed.promise;
+    const items = state.show.mock.calls[0]![0];
+    const branchIndex = items.findIndex((item) => item.id === "new-thread-on-branch");
+    const mainIndex = items.findIndex((item) => item.id === "new-thread-on-main");
+    expect(items[branchIndex]).toMatchObject({ label: "New thread on feature/menu" });
+    expect(items[mainIndex]).toMatchObject({ label: "New thread on main" });
+    expect(mainIndex).toBe(branchIndex + 1);
+    expect(state.effects).toEqual(["draft"]);
+    expect(state.newThreadCalls).toEqual([
+      [
+        { environmentId: target.environmentId, projectId: "project" },
+        {
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+          startFromOrigin: false,
+        },
+      ],
+    ]);
+  });
+
+  it("keeps a new thread on the source branch inside its worktree", async () => {
+    state.granted.add("secondary");
+    state.shell.branch = "feature/menu";
+    state.shell.worktreePath = "/repo/.t3/worktrees/feature-menu";
+    state.show.mockResolvedValue("new-thread-on-branch");
+    createMenu().openMenu(position);
+    await state.completed.promise;
+    expect(state.newThreadCalls).toEqual([
+      [
+        { environmentId: target.environmentId, projectId: "project" },
+        {
+          branch: "feature/menu",
+          worktreePath: "/repo/.t3/worktrees/feature-menu",
+          envMode: "worktree",
+          startFromOrigin: false,
+        },
+      ],
+    ]);
   });
 });

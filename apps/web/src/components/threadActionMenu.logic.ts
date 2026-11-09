@@ -4,6 +4,7 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
 export type ThreadActionMenuId =
   | "find"
   | "new-thread-on-branch"
+  | "new-thread-on-main"
   | "filter-by-project"
   | "turn-into-project"
   | "project-settings"
@@ -102,6 +103,7 @@ export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean
   return ![
     "find",
     "new-thread-on-branch",
+    "new-thread-on-main",
     "project-settings",
     "mark-unread",
     "share-guest",
@@ -111,6 +113,16 @@ export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean
     "copy-thread",
     "copy-thread-id",
   ].includes(action);
+}
+
+/** Project checkout. An unnamed branch follows it, and the source worktree is not reused. */
+export function newThreadOnMainWorkspace() {
+  return {
+    branch: null,
+    worktreePath: null,
+    envMode: "local",
+    startFromOrigin: false,
+  } as const;
 }
 
 export function buildThreadActionMenuItems(
@@ -125,6 +137,11 @@ export function buildThreadActionMenuItems(
           {
             id: "new-thread-on-branch" as const,
             label: `New thread on ${state.branch}`,
+            icon: "message-square-plus",
+          },
+          {
+            id: "new-thread-on-main" as const,
+            label: "New thread on main",
             icon: "message-square-plus",
           },
         ]
