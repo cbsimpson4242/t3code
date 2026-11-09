@@ -18,6 +18,7 @@ import { useRouter } from "@tanstack/react-router";
 import { pickSnoozePreset, resolveSnoozePresets } from "../components/Sidebar.snooze";
 import {
   buildThreadActionMenuItems,
+  newThreadOnMainWorkspace,
   threadActionRequiresOperate,
   type ThreadActionMenuId,
 } from "../components/threadActionMenu.logic";
@@ -216,6 +217,18 @@ export function useThreadActionMenu(input: {
               envMode: thread.worktreePath ? "worktree" : "local",
               startFromOrigin: false,
             }),
+          );
+          if (result._tag === "Failure") {
+            failureToast("Could not create thread", squashAtomCommandFailure(result));
+          }
+          return;
+        }
+        case "new-thread-on-main": {
+          const result = await settlePromise(() =>
+            handleNewThread(
+              scopeProjectRef(threadRef.environmentId, thread.projectId),
+              newThreadOnMainWorkspace(),
+            ),
           );
           if (result._tag === "Failure") {
             failureToast("Could not create thread", squashAtomCommandFailure(result));

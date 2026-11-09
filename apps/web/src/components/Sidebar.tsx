@@ -175,6 +175,7 @@ import { ProjectEnvironmentBadge } from "./ProjectEnvironmentBadge";
 import {
   buildDraftActionMenuItems,
   buildThreadActionMenuItems,
+  newThreadOnMainWorkspace,
   threadActionRequiresOperate,
 } from "./threadActionMenu.logic";
 import {
@@ -2731,6 +2732,25 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 envMode: thread.worktreePath ? "worktree" : "local",
                 startFromOrigin: false,
               }),
+            );
+            if (result._tag === "Failure") {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Could not create thread",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
+          case "new-thread-on-main": {
+            const result = await settlePromise(() =>
+              handleNewThread(
+                scopeProjectRef(thread.environmentId, thread.projectId),
+                newThreadOnMainWorkspace(),
+              ),
             );
             if (result._tag === "Failure") {
               const error = squashAtomCommandFailure(result);
