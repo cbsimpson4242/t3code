@@ -60,6 +60,7 @@ import { ThreadSearchMatchExcerpt } from "../threads/thread-search-match";
 import { pickTriageEnvironment } from "../triage/triageTarget";
 import { useStartTriage } from "../triage/useStartTriage";
 import { useNewTaskFlow } from "../threads/new-task-flow-provider";
+import { useGeneralProject } from "../threads/use-general-project";
 import { useActiveNewTask } from "../../state/active-new-task";
 import {
   filterCommandPaletteItems,
@@ -88,6 +89,7 @@ const SECTION_LABEL_HEIGHT = 26;
 const ACTION_ICONS: Record<string, AppSymbolName> = {
   newTask: "square.and.pencil",
   newThread: "square.and.pencil",
+  newGeneralThread: "text.bubble",
   addProject: "folder.badge.plus",
   settings: "gearshape",
   appearance: "paintbrush",
@@ -272,6 +274,22 @@ export function CommandPalette(props: {
   const newTaskFlow = useNewTaskFlow();
   const draftEnvironmentId =
     useActiveNewTask() === null ? null : (newTaskFlow.selectedProject?.environmentId ?? null);
+  const generalProject = useGeneralProject(activeThreadRef?.environmentId ?? draftEnvironmentId);
+  const startGeneralThread = async () => {
+    const project = await generalProject.open();
+    if (!project) return;
+    selectDetail({
+      name: "Thread",
+      params: {
+        draft: {
+          requestId: uuidv4(),
+          environmentId: project.environmentId,
+          projectId: project.id,
+          title: project.title,
+        },
+      },
+    });
+  };
   const triageEnvironmentId = pickTriageEnvironment({
     // The route names the machine even before the thread shell loads.
     onScreen: activeThreadRef?.environmentId ?? draftEnvironmentId,
@@ -297,6 +315,17 @@ export function CommandPalette(props: {
         searchTerms: ["new task", "chat", "create", "project"],
         run: () => runCommand("newTask"),
       },
+      ...(generalProject.available
+        ? [
+            {
+              key: "newGeneralThread",
+              kind: "action" as const,
+              title: "New thread without a project",
+              searchTerms: ["general", "chat", "no project", "scratch", "create"],
+              run: () => void startGeneralThread(),
+            },
+          ]
+        : []),
       {
         key: "addProject",
         kind: "action",
@@ -466,6 +495,8 @@ export function CommandPalette(props: {
     activeThreadRef,
     environments.length,
     canTriage,
+    generalProject.available,
+    startGeneralThread,
     navigation,
     projects,
     runCommand,

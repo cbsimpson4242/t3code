@@ -38,6 +38,7 @@ import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { openSettings } from "../settings/settings-navigation";
 import { useSelectWorkspaceTab } from "../workspace/useSelectWorkspaceTab";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { newThreadOnMainDraft } from "../threads/thread-route-state";
 
 export function HomeRouteScreen() {
   const { width: windowWidth } = useWindowDimensions();
@@ -87,6 +88,10 @@ export function HomeRouteScreen() {
         worktreePath: thread.worktreePath,
       },
     });
+  };
+
+  const handleNewThreadOnMain = (thread: EnvironmentThreadShell) => {
+    selectThreadRoute({ draft: newThreadOnMainDraft(thread, uuidv4()) });
   };
 
   const {
@@ -258,6 +263,7 @@ export function HomeRouteScreen() {
           onSelectPendingTask={openPendingTask}
           onDeletePendingTask={confirmDeletePendingTask}
           onNewThreadOnBranch={handleNewThreadOnBranch}
+          onNewThreadOnMain={handleNewThreadOnMain}
           onNewThreadInProject={(project) => {
             selectThreadRoute({
               draft: {

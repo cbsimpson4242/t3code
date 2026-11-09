@@ -2,7 +2,9 @@ import * as NodeModule from "node:module";
 import { describe, expect, it } from "vite-plus/test";
 import {
   draftRouteIdentity,
+  draftWorkspaceOverride,
   isDraftThreadRoute,
+  newThreadOnMainDraft,
   submittedThreadParams,
 } from "./thread-route-state";
 
@@ -113,4 +115,43 @@ it("starts a fresh controller for repeated new-task requests in the same project
   expect(draftRouteIdentity({ ...project, requestId: "first" })).not.toBe(
     draftRouteIdentity({ ...project, requestId: "second" }),
   );
+});
+
+describe("new thread on main checkout", () => {
+  const thread = { environmentId: "env", projectId: "project" };
+
+  it("opens an unbranched local draft that follows the project checkout", () => {
+    const draft = newThreadOnMainDraft(thread, "request");
+    expect(draft).toEqual({
+      requestId: "request",
+      environmentId: "env",
+      projectId: "project",
+      checkout: "main",
+    });
+    expect(draftWorkspaceOverride(draft)).toEqual({
+      mode: "local",
+      branch: null,
+      worktreePath: null,
+      startFromOrigin: false,
+      followsCurrentCheckout: true,
+    });
+  });
+
+  it("keeps a branch draft on its branch and worktree, and plain drafts on project defaults", () => {
+    expect(
+      draftWorkspaceOverride({ branch: "feature/menu", worktreePath: "/repo/.t3/worktrees/menu" }),
+    ).toEqual({
+      mode: "local",
+      branch: "feature/menu",
+      worktreePath: "/repo/.t3/worktrees/menu",
+      startFromOrigin: false,
+    });
+    expect(draftWorkspaceOverride({ branch: "main" })).toMatchObject({ worktreePath: null });
+    expect(draftWorkspaceOverride({})).toBeNull();
+  });
+
+  it("is a different draft route from a plain project draft", () => {
+    const main = newThreadOnMainDraft(thread, "request");
+    expect(draftRouteIdentity(main)).not.toBe(draftRouteIdentity({ ...main, checkout: undefined }));
+  });
 });
