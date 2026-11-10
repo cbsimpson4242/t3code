@@ -274,7 +274,12 @@ type ThreadListV2ShelfHeaderProps = {
   readonly pane?: "screen" | "sidebar";
 };
 
-const SHELF_LABEL = { working: "Working", snoozed: "Snoozed", settled: "Settled" } as const;
+const SHELF_LABEL = {
+  pinned: "Pinned",
+  working: "Working",
+  snoozed: "Snoozed",
+  settled: "Settled",
+} as const;
 
 function ThreadListV2ShelfHeader(
   props: ThreadListV2ShelfHeaderProps & { readonly kind: keyof typeof SHELF_LABEL },
@@ -295,6 +300,12 @@ function ThreadListV2ShelfHeader(
     />
   );
 }
+
+export const ThreadListV2PinnedShelfHeader = memo(function ThreadListV2PinnedShelfHeader(
+  props: ThreadListV2ShelfHeaderProps,
+) {
+  return <ThreadListV2ShelfHeader {...props} kind="pinned" />;
+});
 
 export const ThreadListV2WorkingShelfHeader = memo(function ThreadListV2WorkingShelfHeader(
   props: ThreadListV2ShelfHeaderProps,

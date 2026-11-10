@@ -296,6 +296,36 @@ describe("sidebar drag projection", () => {
     thread("s1", "settled"),
   ];
 
+  it("opens a full row for a pin dropped on a collapsible Pinned header", () => {
+    const items = [
+      pinnedHeader,
+      thread("p", "pinned"),
+      divider,
+      thread("a1", "active"),
+      settledHeader,
+      thread("s", "settled"),
+    ];
+    const strategy = (pinnedShelf: boolean) =>
+      createSidebarSortingStrategy({
+        items,
+        settledOrder: [],
+        settledExpanded: true,
+        pinnedShelf,
+      });
+    const args = layout(items, "a1", sidebarMarkerId("pinned-header"));
+    // The collapsible header has a row's height; the drag label has none.
+    const shift = 32;
+    const rects = args.rects.map((rect, index) =>
+      index === 0
+        ? { ...rect, height: shift, bottom: rect.top + shift }
+        : { ...rect, top: rect.top + shift, bottom: rect.bottom + shift },
+    );
+    const at = (pinnedShelf: boolean) => strategy(pinnedShelf)({ ...args, rects, index: 1 });
+    // The pinned row slides down by one card plus the gap under the header, not by the label.
+    expect(at(true)).toEqual({ ...stationary, y: 83 });
+    expect(at(false)).not.toEqual({ ...stationary, y: 83 });
+  });
+
   it("keeps the pinned header above the gap when a lower pin moves to the top", () => {
     const result = preview(
       { items: pinned, settledOrder: [], settledExpanded: true },

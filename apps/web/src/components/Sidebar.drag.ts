@@ -98,6 +98,8 @@ export function createSidebarSortingStrategy(input: {
   settledVisibleCount?: number;
   routeThreadKey?: string | null;
   snoozedThreadCount?: number;
+  /** The Pinned header is a collapsible row, not the zero-height drag label. */
+  pinnedShelf?: boolean;
   cardHeight?: number;
   slimHeight?: number;
   boundaryLabelHeight?: number;
@@ -200,7 +202,8 @@ export function createSidebarSortingStrategy(input: {
           : slimHeight;
       const moved = item.kind === "thread" && item.key === active.key;
       return item.kind === "marker" &&
-        (item.marker === "pinned-header" || item.marker === "pinned-divider")
+        (item.marker === "pinned-divider" ||
+          (item.marker === "pinned-header" && input.pinnedShelf !== true))
         ? labelHeight
         : item.kind === "marker" && item.marker.endsWith("placeholder")
           ? slimHeight

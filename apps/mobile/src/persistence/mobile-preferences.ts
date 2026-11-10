@@ -123,6 +123,8 @@ export interface Preferences {
     readonly model: string;
   }>;
   readonly threadListView?: "standard" | "simple";
+  /** Unset means expanded: pinned threads stay listed until the user collapses the shelf. */
+  readonly threadListPinnedShelfExpanded?: boolean;
   readonly threadListSettledShelfExpanded?: boolean;
   readonly threadListSnoozedShelfExpanded?: boolean;
   readonly threadListWorkingShelfExpanded?: boolean;
@@ -201,6 +203,7 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     lastThreadProject?: typeof ThreadProject.Type;
     modelFavorites?: Preferences["modelFavorites"];
     threadListView?: "standard" | "simple";
+    threadListPinnedShelfExpanded?: boolean;
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
     threadListWorkingShelfExpanded?: boolean;
@@ -345,6 +348,9 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (parsed.threadListView === "standard" || parsed.threadListView === "simple") {
     preferences.threadListView = parsed.threadListView;
+  }
+  if (typeof parsed.threadListPinnedShelfExpanded === "boolean") {
+    preferences.threadListPinnedShelfExpanded = parsed.threadListPinnedShelfExpanded;
   }
   if (typeof parsed.threadListSettledShelfExpanded === "boolean") {
     preferences.threadListSettledShelfExpanded = parsed.threadListSettledShelfExpanded;
