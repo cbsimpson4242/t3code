@@ -2135,6 +2135,11 @@ describe("mobile composer drafts", () => {
         ...getComposerDraftSnapshot(key),
         text: "Ship it",
         attachments: [uploadedElsewhere, uploadedOnTarget],
+        workspaceSelection: {
+          mode: "worktree",
+          branch: "feature",
+          worktreePath: "/repo/.t3/worktrees/feature",
+        },
       },
     });
 
@@ -2143,6 +2148,11 @@ describe("mobile composer drafts", () => {
       projectId: ProjectId.make("project-2"),
     });
 
+    expect(getComposerDraftSnapshot(key)).toMatchObject({
+      text: "Ship it",
+      project: { environmentId: "environment-2", projectId: "project-2" },
+    });
+    expect(getComposerDraftSnapshot(key).workspaceSelection).toBeUndefined();
     expect(getComposerDraftSnapshot(key).attachments).toEqual([
       {
         id: "image-1",

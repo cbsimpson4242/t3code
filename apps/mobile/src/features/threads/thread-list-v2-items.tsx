@@ -667,6 +667,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   ) => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
+  readonly onNewThreadOnMain: (thread: EnvironmentThreadShell) => void;
   readonly onRenameThread: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
@@ -717,6 +718,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onRenameThread,
     onRegenerateThreadTitle,
     onNewThreadOnBranch,
+    onNewThreadOnMain,
     onSettleThread,
     onSnoozeThread,
     onUnsnoozeThread,
@@ -1032,6 +1034,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
       if (nativeEvent.event === "new-thread-on-branch") onNewThreadOnBranch(thread);
+      if (nativeEvent.event === "new-thread-on-main") onNewThreadOnMain(thread);
       if (nativeEvent.event === "settle") handleSettle();
       if (nativeEvent.event === "unsettle") handleUnsettle();
       if (nativeEvent.event === "unsnooze") handleUnsnooze();
@@ -1080,6 +1083,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     },
     [
       onNewThreadOnBranch,
+      onNewThreadOnMain,
       thread,
       handleArchive,
       handleDelete,
@@ -1615,6 +1619,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                     {
                       id: "new-thread-on-branch",
                       title: getThreadListV2NewBranchMenuTitle(thread.branch),
+                      image: "square.and.pencil",
+                    },
+                    {
+                      id: "new-thread-on-main",
+                      title: "New thread on main",
                       image: "square.and.pencil",
                     },
                   ]

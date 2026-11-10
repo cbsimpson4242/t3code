@@ -5,7 +5,7 @@ import { threadHeaderAppearance } from "./thread-header-appearance";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useComposerAttachmentActions } from "../../state/use-composer-attachment-actions";
 import { useWorkspaceBackNavigation } from "../workspace/useAndroidWorkspaceNavigation";
-import { submittedThreadParams } from "./thread-route-state";
+import { draftWorkspaceOverride, submittedThreadParams } from "./thread-route-state";
 import { ThreadScreenBinding, ThreadScreenFallback } from "./ThreadScreenHost";
 import { draftThreadShell } from "./draft-thread-shell";
 import { useRememberThreadProject } from "./useRememberThreadProject";
@@ -93,6 +93,7 @@ import {
 import { incomingShareImports, useIncomingShare } from "../sharing/IncomingShareProvider";
 import { idleShareFlagAtom, idleShareImportPhaseAtom } from "./incomingShareImport";
 import { newTaskFlowKey } from "./new-task-flow-state";
+import { useGeneralProject } from "./use-general-project";
 import { appAtomRegistry } from "../../state/atom-registry";
 
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
@@ -148,6 +149,7 @@ export function NewTaskDraftScreen(props: {
     readonly projectId?: string;
     readonly branch?: string | null;
     readonly worktreePath?: string | null;
+    readonly checkout?: "main" | undefined;
     readonly cloning?: boolean;
   };
   readonly draftId?: string;
@@ -351,6 +353,12 @@ export function NewTaskDraftScreen(props: {
   const isComposerInteractionLocked =
     isIncomingShareTransferPending || flow.submitting || isImportingContext;
   const { environments, selectedEnvironmentId, switchEnvironment, switchingToEnvironmentId } = flow;
+  const generalProject = useGeneralProject(selectedEnvironmentId);
+  const startWithoutProject = async () => {
+    if (isComposerInteractionLocked) return;
+    const project = await generalProject.open();
+    if (project) setProject(project);
+  };
   const cycleEnvironment = () => {
     if (isComposerInteractionLocked) return true;
     const next = nextEnvironmentId(environments, switchingToEnvironmentId ?? selectedEnvironmentId);
@@ -422,7 +430,10 @@ export function NewTaskDraftScreen(props: {
         if (appliedInitialProjectKeyRef.current === directProjectKey) {
           return;
         }
-        if (props.initialProjectRef?.branch) {
+        const workspaceOverride = props.initialProjectRef
+          ? draftWorkspaceOverride(props.initialProjectRef)
+          : null;
+        if (workspaceOverride) {
           if (
             selectedProject?.environmentId !== directProject.environmentId ||
             selectedProject.id !== directProject.id
@@ -431,15 +442,8 @@ export function NewTaskDraftScreen(props: {
             return;
           }
           if (!flow.draftKey) return;
-          // Checkout completed before mount; local mode reuses it while worktree mode would create another.
-          updateComposerDraftSettings(flow.draftKey, {
-            workspaceSelection: {
-              mode: "local",
-              branch: props.initialProjectRef.branch,
-              worktreePath: props.initialProjectRef.worktreePath ?? null,
-              startFromOrigin: false,
-            },
-          });
+          // A branch checkout completed before mount; local mode reuses it while worktree mode would create another.
+          updateComposerDraftSettings(flow.draftKey, { workspaceSelection: workspaceOverride });
         }
         appliedInitialProjectKeyRef.current = directProjectKey;
         if (
@@ -776,6 +780,17 @@ export function NewTaskDraftScreen(props: {
       </View>
 
       {environmentControl}
+      {generalProject.available && props.incomingShareId === undefined ? (
+        <ComposerInlineControl
+          accessibilityHint="Moves this draft out of the project"
+          accessibilityLabel="Start without a project"
+          disabled={isComposerInteractionLocked}
+          icon="text.bubble"
+          label="No project"
+          showChevron={false}
+          onPress={() => void startWithoutProject()}
+        />
+      ) : null}
       {shareUnavailableNotice}
     </View>
   );

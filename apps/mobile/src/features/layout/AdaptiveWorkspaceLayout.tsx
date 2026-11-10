@@ -80,6 +80,7 @@ import { startOpeningDetail } from "../workspace/useSelectWorkspaceDetail";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { HomeListOptionsProvider } from "../home/home-list-options";
 import { newTaskDestination } from "../threads/new-task-project-selection";
+import { newThreadOnMainDraft } from "../threads/thread-route-state";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
 import { ThreadNavigationSidebar } from "../threads/ThreadNavigationSidebar";
 import { useOpenThreadPullRequests } from "../threads/use-open-thread-pull-requests";
@@ -656,6 +657,10 @@ function AdaptiveWorkspaceLayoutContent(
     });
   };
 
+  const handleNewThreadOnMain = (thread: EnvironmentThreadShell) => {
+    handleSelectThreadRoute({ draft: newThreadOnMainDraft(thread, uuidv4()) });
+  };
+
   const handleNewThreadInProject = (project: EnvironmentProject) => {
     handleSelectThreadRoute({
       draft: {
@@ -958,6 +963,7 @@ function AdaptiveWorkspaceLayoutContent(
                     onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
                     onNewThreadInProject={handleNewThreadInProject}
                     onNewThreadOnBranch={handleNewThreadOnBranch}
+                    onNewThreadOnMain={handleNewThreadOnMain}
                     onOpenPendingTask={handleOpenPendingTask}
                     onSelectThread={handleSelectThread}
                     onOpenThreadPullRequests={handleOpenThreadPullRequests}

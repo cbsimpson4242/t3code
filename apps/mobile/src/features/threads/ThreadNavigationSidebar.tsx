@@ -111,6 +111,7 @@ interface ThreadNavigationSidebarProps {
   readonly onOpenSettings: () => void;
   readonly onOpenEnvironmentSettings: () => void;
   readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
+  readonly onNewThreadOnMain: (thread: EnvironmentThreadShell) => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
   readonly onOpenPendingTask: (pendingTask: PendingNewTask) => void;
   readonly onSearchQueryChange: (query: string) => void;
@@ -560,6 +561,7 @@ function ThreadNavigationSidebarPane(
           <ThreadListV2Row
             simple={simpleView}
             onNewThreadOnBranch={props.onNewThreadOnBranch}
+            onNewThreadOnMain={props.onNewThreadOnMain}
             thread={thread}
             variant={item.item.variant}
             hasQueuedMessages={item.hasQueuedMessages}
