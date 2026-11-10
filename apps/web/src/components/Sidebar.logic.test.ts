@@ -1147,6 +1147,68 @@ describe("Working shelf (beta)", () => {
       },
     );
 
+    describe("dropping into a collapsed Pinned shelf", () => {
+      const dropOnPinnedShelf = (input: {
+        readonly activeKey: string;
+        readonly activeSection: SidebarSection;
+        readonly visiblePinnedOrder: readonly string[];
+        readonly pinnedCollapsed: boolean;
+      }) =>
+        planSidebarThreadDrop({
+          activeKey: input.activeKey,
+          activeSection: input.activeSection,
+          target: {
+            section: "pinned",
+            pinnedOrder: input.visiblePinnedOrder,
+            activeOrder: ["a1"],
+          },
+          pinnedOrder: ["p1", "p2"],
+          pinnedKeysById: new Map([
+            ["p1", "m"],
+            ["p2", "t"],
+          ]),
+          reorderableKeys: new Set(["a1", "p1", "p2"]),
+          activeOrder: ["a1"],
+          activeKeysById: new Map([["a1", null]]),
+          pinnedCollapsed: input.pinnedCollapsed,
+        });
+
+      it("pins above the existing pins, since the rows to drop between are hidden", () => {
+        const plan = dropOnPinnedShelf({
+          activeKey: "a1",
+          activeSection: "active",
+          visiblePinnedOrder: ["a1"],
+          pinnedCollapsed: true,
+        });
+        expect(plan.kind).toBe("pin");
+        if (plan.kind !== "pin") return;
+        expect(plan.order).toEqual(["a1", "p1", "p2"]);
+        expect(plan.orderKey! < "m").toBe(true);
+        expect(plan.extraAssignments).toEqual([]);
+      });
+
+      it("keeps the visible order when the Pinned shelf is open", () => {
+        const plan = dropOnPinnedShelf({
+          activeKey: "a1",
+          activeSection: "active",
+          visiblePinnedOrder: ["p1", "a1", "p2"],
+          pinnedCollapsed: false,
+        });
+        expect(plan.kind === "pin" && plan.order).toEqual(["p1", "a1", "p2"]);
+      });
+
+      it("leaves a pinned thread where it is when it is dropped back on the collapsed shelf", () => {
+        expect(
+          dropOnPinnedShelf({
+            activeKey: "p1",
+            activeSection: "pinned",
+            visiblePinnedOrder: ["p1"],
+            pinnedCollapsed: true,
+          }),
+        ).toEqual({ kind: "none" });
+      });
+    });
+
     it("arranges the rows it can write when another row's server cannot store an order", () => {
       const plan = planSidebarThreadDrop({
         activeKey: "a2",

@@ -380,6 +380,11 @@ export function planSidebarThreadDrop(input: {
   readonly activeKeysById: ReadonlyMap<string, string | null | undefined>;
   readonly activeReorderableKeys?: ReadonlySet<string>;
   readonly activeTimeOrdered?: boolean;
+  /**
+   * The Pinned shelf lists no rows to drop between, so a drop into it goes to its top and the
+   * order comes from every pinned thread rather than the rows on screen.
+   */
+  readonly pinnedCollapsed?: boolean;
 }): SidebarThreadDropPlan {
   const {
     activeKey,
@@ -469,7 +474,11 @@ export function planSidebarThreadDrop(input: {
     case "settled":
       return activeSection === "settled" ? { kind: "none" } : { kind: "settle" };
     case "pinned": {
-      const order = target.pinnedOrder;
+      const order = input.pinnedCollapsed
+        ? activeSection === "pinned"
+          ? pinnedOrder
+          : [activeKey, ...pinnedOrder.filter((key) => key !== activeKey)]
+        : target.pinnedOrder;
       if (
         activeSection === "pinned" &&
         order.length === pinnedOrder.length &&

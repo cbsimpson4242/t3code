@@ -1719,3 +1719,122 @@ describe("Working section beta", () => {
     ]);
   });
 });
+
+describe("pinned shelf", () => {
+  const threads = [
+    makeThread({ id: ThreadId.make("pin-a"), title: "Pin A", pinnedAt: NOW, pinOrderKey: "f" }),
+    makeThread({ id: ThreadId.make("pin-b"), title: "Pin B", pinnedAt: NOW, pinOrderKey: "t" }),
+    makeThread({ id: ThreadId.make("active"), title: "Active" }),
+    makeThread({
+      id: ThreadId.make("settled-pin"),
+      title: "Settled pin",
+      pinnedAt: NOW,
+      settledOverride: "settled",
+      settledAt: NOW,
+    }),
+  ];
+  const build = (input: Partial<Parameters<typeof buildThreadListV2Items>[0]> = {}) =>
+    buildThreadListV2Items({
+      threads,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      settledShelfExpanded: false,
+      ...input,
+    });
+  const listed = (
+    layout: ReturnType<typeof buildThreadListV2Items>,
+    pinnedShelfExpanded: boolean,
+    pendingTasks: ReadonlyArray<PendingNewTask> = [],
+  ) =>
+    buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks,
+      pinnedCount: layout.pinnedCount,
+      pinnedShelfExpanded,
+      pinnedShelfHeaderIndex: layout.pinnedShelfHeaderIndex,
+      pinnedShelfEndIndex: layout.pinnedShelfEndIndex,
+      settledCount: layout.settledCount,
+      settledShelfExpanded: false,
+      settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
+    });
+  const names = (items: readonly ThreadListV2ListItem[]) =>
+    items.map((item) =>
+      item.type === "v2-thread"
+        ? item.item.thread.id
+        : item.type === "v2-pending"
+          ? item.pendingTask.title
+          : item.type === "v2-pinned-shelf"
+            ? `${item.type}:${item.count}:${item.expanded ? "open" : "closed"}`
+            : item.type,
+    );
+
+  it("heads the pinned rows with a counted shelf and keeps them out of Active", () => {
+    const layout = build();
+    expect(layout.pinnedCount).toBe(2);
+    expect(layout.pinnedShelfHeaderIndex).toBe(0);
+    expect(layout.pinnedShelfEndIndex).toBe(2);
+    expect(names(listed(layout, true))).toEqual([
+      "v2-pinned-shelf:2:open",
+      "pin-a",
+      "pin-b",
+      "active",
+      "v2-settled-shelf",
+    ]);
+  });
+
+  it("collapses to the header, listing only the open thread, and never duplicates a row", () => {
+    const collapsed = build({ pinnedShelfExpanded: false });
+    expect(collapsed.pinnedCount).toBe(2);
+    expect(names(listed(collapsed, false))).toEqual([
+      "v2-pinned-shelf:2:closed",
+      "active",
+      "v2-settled-shelf",
+    ]);
+
+    const open = build({
+      pinnedShelfExpanded: false,
+      selectedThreadKey: `${environmentId}:pin-b`,
+    });
+    expect(names(listed(open, false))).toEqual([
+      "v2-pinned-shelf:2:closed",
+      "pin-b",
+      "active",
+      "v2-settled-shelf",
+    ]);
+    const rows = names(listed(open, false)).filter((name) => !name.startsWith("v2-"));
+    expect(new Set(rows).size).toBe(rows.length);
+  });
+
+  it("lists queued tasks above the shelf and adds no header when nothing is pinned", () => {
+    const withPins = listed(build(), true, [makePendingTask("queued")]);
+    expect(names(withPins).slice(0, 2)).toEqual(["queued", "v2-pinned-shelf:2:open"]);
+
+    const unpinned = build({ threads: [threads[2]!] });
+    expect(unpinned.pinnedCount).toBe(0);
+    expect(unpinned.pinnedShelfHeaderIndex).toBeNull();
+    expect(names(listed(unpinned, true))).toEqual(["active"]);
+  });
+
+  it("lists search matches by rank without the shelf", () => {
+    const layout = build({ searchQuery: "pin", pinnedShelfExpanded: false });
+    expect(layout.pinnedCount).toBe(0);
+    expect(layout.pinnedShelfHeaderIndex).toBeNull();
+    expect(layout.items.map((item) => item.thread.id)).toContain("pin-a");
+  });
+
+  it("re-renders the header only when its count, state, or disabled flag changes", () => {
+    const header = (count: number, expanded: boolean, disabled = false) =>
+      ({
+        type: "v2-pinned-shelf",
+        key: "v2-pinned-shelf",
+        count,
+        expanded,
+        disabled,
+      }) as const;
+    expect(threadListV2ListItemsAreEqual(header(2, true), header(2, true))).toBe(true);
+    expect(threadListV2ListItemsAreEqual(header(2, true), header(3, true))).toBe(false);
+    expect(threadListV2ListItemsAreEqual(header(2, true), header(2, false))).toBe(false);
+    expect(threadListV2ListItemsAreEqual(header(2, true), header(2, true, true))).toBe(false);
+  });
+});
