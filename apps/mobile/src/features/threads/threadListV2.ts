@@ -632,6 +632,10 @@ export function buildThreadListV2ListItems(input: {
     });
     result.push(...threadItems.slice(settledShelfHeaderIndex));
   }
+  return withTrailingDividers(result);
+}
+
+function withTrailingDividers(result: ReadonlyArray<ThreadListV2ListItem>): ThreadListV2ListItem[] {
   return result.map((entry, index) => {
     if (entry.type !== "v2-thread" && entry.type !== "v2-pending") return entry;
     const next = result[index + 1];
@@ -641,6 +645,59 @@ export function buildThreadListV2ListItems(input: {
       ? entry
       : { ...entry, showTrailingDivider };
   });
+}
+
+export type ThreadListV2Page = "pinned" | "threads";
+
+export interface ThreadListV2Pages {
+  readonly pinned: ReadonlyArray<ThreadListV2ListItem>;
+  readonly threads: ReadonlyArray<ThreadListV2ListItem>;
+  readonly pinnedCount: number;
+  /** Queued tasks and active rows, plus each shelf's full count. */
+  readonly threadsCount: number;
+}
+
+/**
+ * Splits a listed thread list into a Pinned page and a Threads page for phones. The pinned
+ * shelf's header is dropped and its rows become the Pinned page; every other entry keeps its
+ * order on the Threads page. List with the pinned shelf expanded so every pin is present.
+ */
+export function splitThreadListV2Pages(
+  items: ReadonlyArray<ThreadListV2ListItem>,
+): ThreadListV2Pages {
+  const pinned: ThreadListV2ListItem[] = [];
+  const threads: ThreadListV2ListItem[] = [];
+  let inPinnedShelf = false;
+  let inShelf = false;
+  let threadsCount = 0;
+  for (const item of items) {
+    if (item.type === "v2-pinned-shelf") {
+      inPinnedShelf = true;
+      continue;
+    }
+    if (inPinnedShelf && item.type === "v2-thread" && item.item.pinned) {
+      pinned.push(item);
+      continue;
+    }
+    inPinnedShelf = false;
+    if (
+      item.type === "v2-working-shelf" ||
+      item.type === "v2-snoozed-shelf" ||
+      item.type === "v2-settled-shelf"
+    ) {
+      inShelf = true;
+      threadsCount += item.count;
+    } else if (!inShelf) {
+      threadsCount += 1;
+    }
+    threads.push(item);
+  }
+  return {
+    pinned: withTrailingDividers(pinned),
+    threads: withTrailingDividers(threads),
+    pinnedCount: pinned.length,
+    threadsCount,
+  };
 }
 
 // Immutable shells and field-only sorting make element-identical inputs produce identical output.

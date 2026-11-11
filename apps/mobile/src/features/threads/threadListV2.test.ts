@@ -33,6 +33,7 @@ import { threadJumpTarget } from "../keyboard/threadKeyboardShortcuts";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
+  splitThreadListV2Pages,
   getThreadListV2OrderedSection,
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozePresets,
@@ -1836,5 +1837,31 @@ describe("pinned shelf", () => {
     expect(threadListV2ListItemsAreEqual(header(2, true), header(3, true))).toBe(false);
     expect(threadListV2ListItemsAreEqual(header(2, true), header(2, false))).toBe(false);
     expect(threadListV2ListItemsAreEqual(header(2, true), header(2, true, true))).toBe(false);
+  });
+
+  describe("phone pages", () => {
+    it("moves every pin onto the Pinned page and keeps the rest, in order, on Threads", () => {
+      const pages = splitThreadListV2Pages(listed(build(), true, [makePendingTask("queued")]));
+      expect(names(pages.pinned)).toEqual(["pin-a", "pin-b"]);
+      expect(names(pages.threads)).toEqual(["queued", "active", "v2-settled-shelf"]);
+      expect(pages.pinnedCount).toBe(2);
+      expect(pages.threadsCount).toBe(3);
+    });
+
+    it("recomputes dividers within each page", () => {
+      const pages = splitThreadListV2Pages(listed(build(), true));
+      const dividers = (items: readonly ThreadListV2ListItem[]) =>
+        items.flatMap((item) => (item.type === "v2-thread" ? [item.showTrailingDivider] : []));
+      expect(dividers(pages.pinned)).toEqual([true, false]);
+      expect(dividers(pages.threads)).toEqual([false]);
+    });
+
+    it("leaves an unpinned list whole on the Threads page", () => {
+      const items = listed(build({ threads: [threads[2]!] }), true);
+      const pages = splitThreadListV2Pages(items);
+      expect(pages.pinned).toEqual([]);
+      expect(pages.pinnedCount).toBe(0);
+      expect(names(pages.threads)).toEqual(names(items));
+    });
   });
 });

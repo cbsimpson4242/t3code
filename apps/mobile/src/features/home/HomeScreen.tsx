@@ -36,6 +36,7 @@ import {
 } from "react-native";
 import { NativeScrollViewMarker as ScrollViewMarker } from "../../native/NativeScrollViewMarker";
 import { GestureDetector, useNativeGesture } from "react-native-gesture-handler";
+import Animated from "react-native-reanimated";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -81,10 +82,12 @@ import { useThreadRowProviderInstanceResolver } from "../threads/thread-provider
 import { useOpenThreadPullRequests } from "../threads/use-open-thread-pull-requests";
 import type { ThreadPrPresentation } from "../../state/thread-pr-presentation";
 import {
+  splitThreadListV2Pages,
   threadListV2ListItemsAreEqual,
   THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
   type ThreadListV2ListItem,
+  type ThreadListV2Page,
 } from "../threads/threadListV2";
 import { useThreadListV2ShelfPreferences } from "../threads/use-thread-list-v2-shelf-preferences";
 import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
@@ -98,6 +101,8 @@ import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-sw
 import { useFabScroll } from "./FabScrollContext";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { ThreadListFilters } from "./ThreadListFilters";
+import { ThreadListPageTabs, useThreadListPageSwipe } from "./thread-list-pages";
+import { useAdaptiveWorkspaceLayout } from "../layout/adaptive-workspace-context";
 
 interface HomeScreenProps {
   readonly projects: ReadonlyArray<EnvironmentProject>;
@@ -396,6 +401,14 @@ export function HomeScreen(props: HomeScreenProps) {
     [projects, selectedEnvironmentId, projectGroupingMode],
   );
   const hasSearchQuery = props.searchQuery.trim().length > 0;
+  const { layout: workspaceLayout } = useAdaptiveWorkspaceLayout();
+  // Phones page the list between Pinned and Threads; search lists every match together.
+  const pinPagesAvailable =
+    Platform.OS === "android" &&
+    !primaryColumn &&
+    !workspaceLayout.usesSplitView &&
+    !hasSearchQuery;
+  const [pinPage, setPinPage] = useState<ThreadListV2Page>("threads");
   const projectByKey = (() => {
     const map = new Map<string, EnvironmentProject>();
     for (const project of props.projects) {
@@ -499,10 +512,29 @@ export function HomeScreen(props: HomeScreenProps) {
     shelfPreferencesLoaded,
     workingShelfEnabled,
     workingShelfExpanded,
-    pinnedShelfExpanded,
+    // The Pinned page replaces the shelf, so it always lists every pin.
+    pinnedShelfExpanded: pinPagesAvailable || pinnedShelfExpanded,
     snoozedShelfExpanded,
     settledShelfExpanded,
     selectedThreadKey,
+  });
+  const splitPages = pinPagesAvailable ? splitThreadListV2Pages(threadListV2Items) : null;
+  const pinPages = splitPages !== null && splitPages.pinnedCount > 0 ? splitPages : null;
+  // Unpinning the last pin returns to Threads.
+  const visiblePage: ThreadListV2Page = pinPages === null ? "threads" : pinPage;
+  const visibleItems =
+    pinPages === null
+      ? threadListV2Items
+      : visiblePage === "pinned"
+        ? pinPages.pinned
+        : pinPages.threads;
+  const pageSwipe = useThreadListPageSwipe({
+    page: visiblePage,
+    enabled: pinPages !== null,
+    onPageChange: (page) => {
+      setPinPage(page);
+      void listRef.current?.scrollToOffset({ offset: 0, animated: false });
+    },
   });
   // Called as `props.onSelectThread(...)`, the compiler would cache this handler on the whole
   // props object, which is new on every render of Home's parent.
@@ -519,11 +551,11 @@ export function HomeScreen(props: HomeScreenProps) {
     }
     onSelectThread(thread);
   };
-  useThreadJumpShortcuts(threadListV2Items, selectThread);
+  useThreadJumpShortcuts(visibleItems, selectThread);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the list's visible range after commit to enable swipe gestures on those rows
   useEffect(() => {
-    if (swipeEnabled) activateVisibleRows(threadListV2Items);
-  }, [activateVisibleRows, swipeEnabled, threadListV2Items]);
+    if (swipeEnabled) activateVisibleRows(visibleItems);
+  }, [activateVisibleRows, swipeEnabled, visibleItems]);
 
   const renderV2Item = ({ item }: { readonly item: ThreadListV2ListItem }) => {
     if (item.type === "v2-pending") {
@@ -778,7 +810,13 @@ export function HomeScreen(props: HomeScreenProps) {
   );
 
   const v2ListEmpty =
-    hasSearchQuery && threadSearch.isPending ? undefined : hasSearchQuery ? (
+    hasSearchQuery && threadSearch.isPending ? undefined : pinPages !== null ? (
+      <EmptyState
+        title="Everything is pinned"
+        detail="Swipe right to see your pinned threads, or create a new task."
+        variant="plain"
+      />
+    ) : hasSearchQuery ? (
       <EmptyState
         title="No results"
         detail={`No threads matching "${props.searchQuery}".`}
@@ -827,95 +865,107 @@ export function HomeScreen(props: HomeScreenProps) {
             : cn("flex-1", contentBackground)
         }
       >
+        {pinPages !== null ? (
+          <ThreadListPageTabs
+            page={visiblePage}
+            pinnedCount={pinPages.pinnedCount}
+            threadsCount={pinPages.threadsCount}
+            horizontalInset={androidListGutter}
+            onSelect={pageSwipe.showPage}
+          />
+        ) : null}
+        {/* With pages, a horizontal swipe switches page; row actions stay on long press. */}
         <SwipeableScrollGateProvider
-          enabled={swipeEnabled}
+          enabled={swipeEnabled && pinPages === null}
           activation={simpleView ? undefined : swipeRowActivation}
         >
-          <GestureDetector gesture={homeScrollGesture}>
-            <AnimatedLegendList<ThreadListV2ListItem | SimpleGridRow<ThreadListV2ListItem>>
-              itemLayoutAnimation={primaryColumn ? THREAD_SIDEBAR_ROW_LAYOUT : undefined}
-              ref={listRef}
-              onLoad={() => activateVisibleRows(threadListV2Items)}
-              onTouchStart={(event) => trackListTouches(event, true)}
-              onTouchEnd={(event) => trackListTouches(event, false)}
-              onTouchCancel={(event) => trackListTouches(event, false)}
-              renderScrollComponent={Platform.OS === "ios" ? renderHomeScrollView : undefined}
-              data={
-                simpleView
-                  ? groupSimpleThreadRows(threadListV2Items, gridColumns)
-                  : threadListV2Items
-              }
-              renderItem={({ item }) =>
-                item.type === "simple-grid" ? (
-                  <SimpleGridCells
-                    cells={item.cells}
-                    columns={gridColumns}
-                    render={(cell) => renderV2Item({ item: cell })}
-                  />
-                ) : (
-                  renderV2Item({ item })
-                )
-              }
-              keyExtractor={v2KeyExtractor}
-              getItemType={(item) => item.type}
-              itemsAreEqual={(a, b) =>
-                a.type === "simple-grid" || b.type === "simple-grid"
-                  ? a === b
-                  : threadListV2ListItemsAreEqual(a, b)
-              }
-              estimatedItemSize={ESTIMATED_THREAD_LIST_V2_ROW_HEIGHT}
-              drawDistance={THREAD_LIST_V2_DRAW_DISTANCE}
-              recycleItems
-              extraData={v2ExtraData}
-              ListHeaderComponent={v2ListHeader}
-              ListFooterComponent={
-                settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0 ? (
-                  <ThreadListV2ShowMoreRow
-                    hiddenCount={threadListV2Layout.hiddenSettledCount}
-                    {...(olderSettledShelf.loading
-                      ? { state: "loading" as const }
-                      : olderSettledShelf.failed
-                        ? { state: "failed" as const }
-                        : {})}
-                    onPress={() => {
-                      olderSettledShelf.retry();
-                      showMoreSettled();
-                    }}
-                  />
-                ) : null
-              }
-              ListEmptyComponent={v2ListEmpty}
-              style={{ flex: 1 }}
-              automaticallyAdjustsScrollIndicatorInsets={Platform.OS === "ios"}
-              // UIKit owns the bar's inset, so a minimizing bar and a resized column move
-              // the list in the same frame as the bar.
-              contentInsetAdjustmentBehavior="automatic"
-              contentInsetStartAdjustment={Platform.OS === "ios" ? insets.top : 0}
-              // RN scrollTo clamps against raw insets and ignores the automatic bar inset.
-              scrollToOverflowEnabled
-              initialScrollOffset={
-                initialScrollOffset > 0
-                  ? initialScrollOffset - (Platform.OS === "ios" ? insets.top : 0)
-                  : undefined
-              }
-              showsVerticalScrollIndicator={false}
-              keyboardDismissMode="on-drag"
-              keyboardShouldPersistTaps="handled"
-              {...scrollGateHandlers}
-              scrollEventThrottle={16}
-              contentContainerStyle={{
-                paddingLeft:
-                  (contentSideInsets?.left ?? 0) + (primaryColumn ? 8 : 0) + androidListGutter,
-                paddingRight:
-                  (contentSideInsets?.right ?? 0) + (primaryColumn ? 8 : 0) + androidListGutter,
-                paddingBottom:
-                  Platform.OS === "ios"
-                    ? iosBottomClearance - (columnMetrics?.safeArea.bottom ?? insets.bottom)
-                    : (workspace?.bottomClearance ??
-                      Math.max(insets.bottom, 16) +
-                        (Platform.OS === "android" ? fabClearance : 88)),
-              }}
-            />
+          <GestureDetector gesture={pageSwipe.gesture}>
+            <Animated.View style={[{ flex: 1 }, pageSwipe.animatedStyle]}>
+              <GestureDetector gesture={homeScrollGesture}>
+                <AnimatedLegendList<ThreadListV2ListItem | SimpleGridRow<ThreadListV2ListItem>>
+                  itemLayoutAnimation={primaryColumn ? THREAD_SIDEBAR_ROW_LAYOUT : undefined}
+                  ref={listRef}
+                  onLoad={() => activateVisibleRows(visibleItems)}
+                  onTouchStart={(event) => trackListTouches(event, true)}
+                  onTouchEnd={(event) => trackListTouches(event, false)}
+                  onTouchCancel={(event) => trackListTouches(event, false)}
+                  renderScrollComponent={Platform.OS === "ios" ? renderHomeScrollView : undefined}
+                  data={
+                    simpleView ? groupSimpleThreadRows(visibleItems, gridColumns) : visibleItems
+                  }
+                  renderItem={({ item }) =>
+                    item.type === "simple-grid" ? (
+                      <SimpleGridCells
+                        cells={item.cells}
+                        columns={gridColumns}
+                        render={(cell) => renderV2Item({ item: cell })}
+                      />
+                    ) : (
+                      renderV2Item({ item })
+                    )
+                  }
+                  keyExtractor={v2KeyExtractor}
+                  getItemType={(item) => item.type}
+                  itemsAreEqual={(a, b) =>
+                    a.type === "simple-grid" || b.type === "simple-grid"
+                      ? a === b
+                      : threadListV2ListItemsAreEqual(a, b)
+                  }
+                  estimatedItemSize={ESTIMATED_THREAD_LIST_V2_ROW_HEIGHT}
+                  drawDistance={THREAD_LIST_V2_DRAW_DISTANCE}
+                  recycleItems
+                  extraData={v2ExtraData}
+                  ListHeaderComponent={v2ListHeader}
+                  ListFooterComponent={
+                    settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0 ? (
+                      <ThreadListV2ShowMoreRow
+                        hiddenCount={threadListV2Layout.hiddenSettledCount}
+                        {...(olderSettledShelf.loading
+                          ? { state: "loading" as const }
+                          : olderSettledShelf.failed
+                            ? { state: "failed" as const }
+                            : {})}
+                        onPress={() => {
+                          olderSettledShelf.retry();
+                          showMoreSettled();
+                        }}
+                      />
+                    ) : null
+                  }
+                  ListEmptyComponent={v2ListEmpty}
+                  style={{ flex: 1 }}
+                  automaticallyAdjustsScrollIndicatorInsets={Platform.OS === "ios"}
+                  // UIKit owns the bar's inset, so a minimizing bar and a resized column move
+                  // the list in the same frame as the bar.
+                  contentInsetAdjustmentBehavior="automatic"
+                  contentInsetStartAdjustment={Platform.OS === "ios" ? insets.top : 0}
+                  // RN scrollTo clamps against raw insets and ignores the automatic bar inset.
+                  scrollToOverflowEnabled
+                  initialScrollOffset={
+                    initialScrollOffset > 0
+                      ? initialScrollOffset - (Platform.OS === "ios" ? insets.top : 0)
+                      : undefined
+                  }
+                  showsVerticalScrollIndicator={false}
+                  keyboardDismissMode="on-drag"
+                  keyboardShouldPersistTaps="handled"
+                  {...scrollGateHandlers}
+                  scrollEventThrottle={16}
+                  contentContainerStyle={{
+                    paddingLeft:
+                      (contentSideInsets?.left ?? 0) + (primaryColumn ? 8 : 0) + androidListGutter,
+                    paddingRight:
+                      (contentSideInsets?.right ?? 0) + (primaryColumn ? 8 : 0) + androidListGutter,
+                    paddingBottom:
+                      Platform.OS === "ios"
+                        ? iosBottomClearance - (columnMetrics?.safeArea.bottom ?? insets.bottom)
+                        : (workspace?.bottomClearance ??
+                          Math.max(insets.bottom, 16) +
+                            (Platform.OS === "android" ? fabClearance : 88)),
+                  }}
+                />
+              </GestureDetector>
+            </Animated.View>
           </GestureDetector>
         </SwipeableScrollGateProvider>
       </View>
