@@ -246,6 +246,51 @@ export async function downloadAndShareAttachment(input: {
   }
 }
 
+export type SaveAttachmentResult = "downloads" | "folder" | "cancelled";
+
+/**
+ * Saves a downloaded attachment to the device's Downloads folder. Android 10+ takes it through
+ * MediaStore, so there is no permission prompt; Android 9 and older have no such collection and
+ * get the system folder picker instead. Both reuse modules the app already links.
+ */
+export async function saveAttachmentToDownloads(input: {
+  readonly url: string;
+  readonly attachment: AttachmentFileMetadata;
+  readonly signal: AbortSignal;
+}): Promise<SaveAttachmentResult> {
+  const file = await downloadAttachmentForPreview(input);
+  if (file === null) return "cancelled";
+  try {
+    const name = downloadFileName(input.attachment.name);
+    const mimeType =
+      input.attachment.mimeType.split(";", 1)[0]?.trim() || "application/octet-stream";
+    try {
+      const { default: BlobUtil } = await import("react-native-blob-util");
+      await BlobUtil.MediaCollection.copyToMediaStore(
+        { name, parentFolder: "", mimeType } as never,
+        "Download",
+        decodeURIComponent(file.uri.replace(/^file:\/\//, "")),
+      );
+      return "downloads";
+    } catch (cause) {
+      if (input.signal.aborted) return "cancelled";
+      console.warn("[attachment-downloads] MediaStore save failed, asking for a folder", cause);
+    }
+    const { Directory, File } = await import("expo-file-system");
+    let folder: InstanceType<typeof Directory>;
+    try {
+      folder = await Directory.pickDirectoryAsync();
+    } catch {
+      // Dismissing the picker is the user's choice, not a failure.
+      return "cancelled";
+    }
+    folder.createFile(name, mimeType).write(await new File(file.uri).bytes());
+    return "folder";
+  } finally {
+    file.dispose();
+  }
+}
+
 export async function shareLocalAttachment(input: {
   readonly uri: string;
   readonly attachment: AttachmentFileMetadata;

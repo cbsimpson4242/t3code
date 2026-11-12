@@ -51,6 +51,23 @@ describe("resolveAssistantMessageCopyState", () => {
       visible: true,
     });
   });
+
+  it("copies a reply without its delivered files' MEDIA tags", () => {
+    expect(
+      resolveAssistantMessageCopyState({
+        showCopyButton: true,
+        text: "Report attached.\n\nMEDIA:/tmp/report.pdf\n\n[[audio_as_voice]]\nMEDIA:/tmp/voice.mp3",
+        streaming: false,
+      }),
+    ).toEqual({ text: "Report attached.", visible: true });
+    expect(
+      resolveAssistantMessageCopyState({
+        showCopyButton: true,
+        text: "MEDIA:/tmp/report.pdf",
+        streaming: false,
+      }),
+    ).toEqual({ text: null, visible: false });
+  });
 });
 
 describe("deriveMessagesTimelineRows", () => {

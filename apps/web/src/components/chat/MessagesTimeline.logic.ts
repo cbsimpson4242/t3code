@@ -15,6 +15,7 @@ import {
 } from "@t3tools/client-runtime/user-message";
 import type { HandoffTimelineRun } from "@t3tools/client-runtime/handoff";
 import { renderCodexDirectivesForCopy } from "@t3tools/shared/codexMarkdownDirectives";
+import { parseAgentMessageContent } from "@t3tools/shared/voiceMessage";
 import {
   commandDisplayText,
   commandProgramName,
@@ -673,10 +674,12 @@ export function resolveAssistantMessageCopyState({
   showCopyButton: boolean;
   streaming: boolean;
 }) {
-  const hasText = text !== null && text.trim().length > 0;
+  // Delivery tags are controls, not words: copying a reply must not include them.
+  const shownText = text === null ? null : parseAgentMessageContent(text).text;
+  const hasText = shownText !== null && shownText.trim().length > 0;
   const visible = showCopyButton && hasText && !streaming;
   return {
-    text: hasText ? (visible ? renderCodexDirectivesForCopy(text) : text) : null,
+    text: hasText ? (visible ? renderCodexDirectivesForCopy(shownText) : shownText) : null,
     visible,
   };
 }

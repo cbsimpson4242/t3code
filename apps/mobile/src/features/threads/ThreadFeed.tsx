@@ -1,5 +1,5 @@
-import { parseVoiceMessageContent } from "@t3tools/shared/voiceMessage";
-import { VoiceMessagePlayer } from "./VoiceMessagePlayer";
+import { parseAgentMessageContent } from "@t3tools/shared/voiceMessage";
+import { AgentMediaAttachments } from "./AgentMediaAttachments";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
@@ -1875,10 +1875,10 @@ function renderFeedEntry(
     const { message } = entry;
     const isUser = message.role === "user";
     const presentation = resolveUserMessagePresentation(message);
-    const voiceContent = isUser
-      ? { text: presentation.text, audioPaths: [] }
-      : parseVoiceMessageContent(presentation.text);
-    const renderedText = renderAssistantCitationsAsText(voiceContent.text);
+    const agentContent = isUser
+      ? { text: presentation.text, media: [] }
+      : parseAgentMessageContent(presentation.text);
+    const renderedText = renderAssistantCitationsAsText(agentContent.text);
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
     const timestampLabel = formatMessageTime(isUser ? message.createdAt : message.updatedAt);
     const attachments = message.attachments ?? [];
@@ -2246,7 +2246,11 @@ function renderFeedEntry(
       );
     }
 
-    if (renderedText.trim().length === 0 && attachments.length === 0) {
+    if (
+      renderedText.trim().length === 0 &&
+      attachments.length === 0 &&
+      agentContent.media.length === 0
+    ) {
       return null;
     }
 
@@ -2274,16 +2278,14 @@ function renderFeedEntry(
             />
           </MarkdownImageAvailableWidthContext>
         ) : null}
-        {voiceContent.audioPaths.map((path, index) => (
-          <VoiceMessagePlayer
-            key={path}
-            id={`${props.environmentId}:${message.id}:${index}`}
-            environmentId={props.environmentId}
-            threadId={props.threadId}
-            path={path}
-            onPlaybackStart={props.onPlaybackStart}
-          />
-        ))}
+        <AgentMediaAttachments
+          messageId={message.id}
+          items={agentContent.media}
+          environmentId={props.environmentId}
+          threadId={props.threadId}
+          onPressPreview={props.onPressPreview}
+          onPlaybackStart={props.onPlaybackStart}
+        />
         <MessageAttachmentList
           attachments={attachments}
           environmentId={props.environmentId}

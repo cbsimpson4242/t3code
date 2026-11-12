@@ -10,10 +10,15 @@ const mocks = vi.hoisted(() => ({
   available: vi.fn(),
   open: vi.fn(),
   uuid: vi.fn(),
+  copyToMediaStore: vi.fn(),
+  pickDirectory: vi.fn(),
+  createFile: vi.fn(),
+  writeFile: vi.fn(),
 }));
 
 vi.mock("expo-file-system", () => {
   class Directory {
+    static pickDirectoryAsync = mocks.pickDirectory;
     readonly uri: string;
 
     constructor(...parts: Array<string | Directory>) {
@@ -30,6 +35,11 @@ vi.mock("expo-file-system", () => {
 
     create(): void {
       mocks.directories.add(this.uri);
+    }
+
+    createFile(name: string, mimeType: string | null) {
+      mocks.createFile(this.uri, name, mimeType);
+      return { write: mocks.writeFile };
     }
 
     list(): Directory[] {
@@ -56,10 +66,18 @@ vi.mock("expo-file-system", () => {
     async copy(destination: File): Promise<void> {
       await mocks.copy(this.uri, destination.uri);
     }
+
+    async bytes(): Promise<Uint8Array> {
+      return new Uint8Array([1, 2, 3]);
+    }
   }
 
   return { Directory, File, Paths: { cache: "file:///cache" } };
 });
+
+vi.mock("react-native-blob-util", () => ({
+  default: { MediaCollection: { copyToMediaStore: mocks.copyToMediaStore } },
+}));
 
 vi.mock("expo", () => ({ requireNativeModule: () => ({ openFile: mocks.open }) }));
 
@@ -74,6 +92,7 @@ vi.mock("./shareFileFromSource", () => ({ shareFileFromSource: mocks.shareFromSo
 import {
   downloadAndShareAttachment,
   downloadAttachmentForPreview,
+  saveAttachmentToDownloads,
   shareLocalAttachment,
 } from "./attachmentDownload";
 import { isForegroundHandoffActive } from "./foreground-handoff";
@@ -96,6 +115,11 @@ beforeEach(() => {
   mocks.shareFromSource.mockReset();
   mocks.available.mockReset();
   mocks.uuid.mockReset();
+  mocks.copyToMediaStore.mockReset();
+  mocks.pickDirectory.mockReset();
+  mocks.createFile.mockReset();
+  mocks.writeFile.mockReset();
+  mocks.copyToMediaStore.mockResolvedValue("content://media/downloads/1");
   mocks.download.mockImplementation(async (_url: string, file: { uri: string }) => file);
   mocks.copy.mockResolvedValue(undefined);
   mocks.share.mockResolvedValue(undefined);
@@ -342,5 +366,69 @@ describe("attachment preview files", () => {
     await task;
     expect(mocks.share).not.toHaveBeenCalled();
     expect(mocks.deleted).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("saveAttachmentToDownloads", () => {
+  it("copies the downloaded file into the MediaStore Downloads collection and drops the cache", async () => {
+    await expect(
+      saveAttachmentToDownloads({ ...input, signal: new AbortController().signal }),
+    ).resolves.toBe("downloads");
+
+    expect(mocks.copyToMediaStore).toHaveBeenCalledWith(
+      { name: "report.pdf", parentFolder: "", mimeType: "application/pdf" },
+      "Download",
+      expect.stringMatching(/^\/cache\/.+\/report\.pdf$/),
+    );
+    expect(mocks.pickDirectory).not.toHaveBeenCalled();
+    expect(mocks.share).not.toHaveBeenCalled();
+    expect(mocks.deleted).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the saved file safely and falls back to a generic type", async () => {
+    await saveAttachmentToDownloads({
+      url: input.url,
+      attachment: { name: "../../mail.eml", mimeType: "" },
+      signal: new AbortController().signal,
+    });
+    expect(mocks.copyToMediaStore).toHaveBeenCalledWith(
+      { name: "mail.eml", parentFolder: "", mimeType: "application/octet-stream" },
+      "Download",
+      expect.any(String),
+    );
+  });
+
+  it("asks for a folder when the device has no Downloads collection", async () => {
+    mocks.copyToMediaStore.mockRejectedValue(new Error("File could not be created"));
+    mocks.pickDirectory.mockResolvedValue(new (await import("expo-file-system")).Directory("saf"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(
+      saveAttachmentToDownloads({ ...input, signal: new AbortController().signal }),
+    ).resolves.toBe("folder");
+
+    expect(mocks.createFile).toHaveBeenCalledWith("saf", "report.pdf", "application/pdf");
+    expect(mocks.writeFile).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]));
+    expect(mocks.deleted).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a dismissed folder picker as cancelled, not a failure", async () => {
+    mocks.copyToMediaStore.mockRejectedValue(new Error("unsupported"));
+    mocks.pickDirectory.mockRejectedValue(new Error("picker cancelled"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(
+      saveAttachmentToDownloads({ ...input, signal: new AbortController().signal }),
+    ).resolves.toBe("cancelled");
+    expect(mocks.writeFile).not.toHaveBeenCalled();
+    expect(mocks.deleted).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a failed download instead of saving a partial file", async () => {
+    mocks.download.mockRejectedValue(new Error("network"));
+    await expect(
+      saveAttachmentToDownloads({ ...input, signal: new AbortController().signal }),
+    ).rejects.toThrow("Could not download the attachment");
+    expect(mocks.copyToMediaStore).not.toHaveBeenCalled();
   });
 });
