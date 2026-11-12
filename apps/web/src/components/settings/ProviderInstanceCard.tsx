@@ -68,6 +68,7 @@ import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
+import { HERMES_ACP_AGENT_NAME, isHermesLocalAcpConfig } from "../../hermesProvider";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
 import {
@@ -902,7 +903,9 @@ export function ProviderInstanceCard({
       accentColor={accentColor}
       acpRegistryAgentId={
         readConfigString(instance.config, "source") === "local"
-          ? undefined
+          ? isHermesLocalAcpConfig(instance.config)
+            ? HERMES_ACP_AGENT_NAME
+            : undefined
           : (readConfigString(instance.config, "agentId") ?? undefined)
       }
       acpRegistryIconUrl={

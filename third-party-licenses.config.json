@@ -119,6 +119,13 @@
       "sourceUrl": "https://github.com/ghostty-org/ghostty"
     },
     {
+      "bundles": ["web"],
+      "license": "MIT",
+      "name": "Hermes Agent logo",
+      "noticeFile": "apps/web/src/assets/hermes/LICENSE.hermes-agent",
+      "sourceUrl": "https://github.com/NousResearch/hermes-agent"
+    },
+    {
       "bundles": ["assets", "web"],
       "license": "MIT",
       "name": "Symbols Nerd Font Mono",

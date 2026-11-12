@@ -81,7 +81,8 @@ export const ModelListRow = memo(function ModelListRow(props: {
         </div>
         {props.isSelected ? <CheckIcon className="size-3.5 shrink-0" aria-hidden="true" /> : null}
         {props.subProvider ? (
-          <span className="min-w-0 shrink truncate text-xs text-muted-foreground/70">
+          // Shrinks far faster than the name, so the model id is cut only after this label is gone.
+          <span className="min-w-0 shrink-[100] truncate text-xs text-muted-foreground/70">
             {props.subProvider}
           </span>
         ) : null}

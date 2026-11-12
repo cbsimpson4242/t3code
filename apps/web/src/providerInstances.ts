@@ -18,6 +18,8 @@ import {
   shouldShowInstanceBadge,
 } from "@t3tools/client-runtime/state/provider-instance-display";
 
+import { HERMES_ACP_AGENT_NAME, isHermesLocalAcpConfig } from "./hermesProvider";
+
 export { normalizeProviderAccentColor, shouldShowInstanceBadge };
 
 /** Placeholder for untargetable drafts. Never persist or dispatch it; disable send until replaced. */
@@ -138,7 +140,11 @@ function applyProviderInstanceBranding(
       ? (explicitInstance.config as Readonly<Record<string, unknown>>)
       : null;
   if (config?.source === "local") {
-    return { ...entry, acpRegistryAgentId: undefined, acpRegistryIconUrl: undefined };
+    return {
+      ...entry,
+      acpRegistryAgentId: isHermesLocalAcpConfig(config) ? HERMES_ACP_AGENT_NAME : undefined,
+      acpRegistryIconUrl: undefined,
+    };
   }
   const agentId = config?.agentId;
   const iconUrl = config?.registryIconUrl;

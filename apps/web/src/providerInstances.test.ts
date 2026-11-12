@@ -540,6 +540,35 @@ describe("resolveDefaultProviderModelSelection", () => {
 });
 
 describe("provider icon metadata", () => {
+  it("brands a local ACP instance whose command is hermes", () => {
+    const instanceId = ProviderInstanceId.make("hermes");
+    const driver = ProviderDriverKind.make("acpRegistry");
+    const entries = deriveProviderInstanceEntries([provider({ provider: driver, instanceId })]);
+    const brand = (config: Record<string, unknown>) =>
+      applyProviderInstanceSettings(
+        entries,
+        {
+          providerInstances: { [instanceId]: { driver, enabled: true, config } },
+          projectSettingsOverrides: {},
+        },
+        null,
+      )[0];
+    const hermes = brand({
+      source: "local",
+      commandPath: "/home/chris/.local/bin/hermes",
+      commandArgs: ["-p", "default", "acp"],
+    });
+    expect(hermes?.acpRegistryAgentId).toBe("hermes-agent");
+    expect(hermes?.acpRegistryIconUrl).toBeUndefined();
+    expect(
+      brand({ source: "local", commandPath: "C:\\tools\\Hermes.exe" })?.acpRegistryAgentId,
+    ).toBe("hermes-agent");
+    expect(
+      brand({ source: "local", commandPath: "/usr/bin/hermes-other" })?.acpRegistryAgentId,
+    ).toBeUndefined();
+    expect(brand({ source: "local", commandPath: "dsh" })?.acpRegistryAgentId).toBeUndefined();
+  });
+
   it("clears stale registry branding when an instance switches to a local command", () => {
     const instanceId = ProviderInstanceId.make("custom-acp");
     const driver = ProviderDriverKind.make("acpRegistry");

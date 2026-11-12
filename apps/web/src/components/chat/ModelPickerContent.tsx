@@ -38,7 +38,7 @@ import {
   ComboboxItem,
   ComboboxListVirtualized,
 } from "../ui/combobox";
-import { ModelEsque } from "./providerIconUtils";
+import { ModelEsque, getDisplayModelName, splitQualifiedModelName } from "./providerIconUtils";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { registerModelPickerContent } from "../../modelPickerVisibility";
 import { primaryServerKeybindingsAtom } from "../../state/server";
@@ -560,11 +560,12 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         ) {
           continue;
         }
+        const subProvider = model.subProvider ?? splitQualifiedModelName(model.name)?.label;
         out.push({
           slug: model.slug,
           name: model.name,
           ...(model.shortName ? { shortName: model.shortName } : {}),
-          ...(model.subProvider ? { subProvider: model.subProvider } : {}),
+          ...(subProvider ? { subProvider } : {}),
           ...(model.badge ? { badge: model.badge } : {}),
           ...(model.isLegacy ? { isLegacy: true } : {}),
           ...(model.isUnavailable ? { isUnavailable: true } : {}),
@@ -827,10 +828,10 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     }
     const selectedSlug = handleModelSelect(model.slug, model.instanceId);
     if (selectedSlug === null) return;
-    const name = flatModels.find(
+    const selected = flatModels.find(
       (item) => item.slug === selectedSlug && item.instanceId === model.instanceId,
-    )?.name;
-    announce(`Model: ${name ?? selectedSlug}`, "model-picker");
+    );
+    announce(`Model: ${selected ? getDisplayModelName(selected) : selectedSlug}`, "model-picker");
   };
 
   return (
