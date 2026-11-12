@@ -126,6 +126,13 @@
       "sourceUrl": "https://github.com/NousResearch/hermes-agent"
     },
     {
+      "bundles": ["android", "ios", "mobile"],
+      "license": "MIT",
+      "name": "Hermes Agent logo",
+      "noticeFile": "apps/mobile/assets/hermes/LICENSE.hermes-agent",
+      "sourceUrl": "https://github.com/NousResearch/hermes-agent"
+    },
+    {
       "bundles": ["assets", "web"],
       "license": "MIT",
       "name": "Symbols Nerd Font Mono",

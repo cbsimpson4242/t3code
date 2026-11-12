@@ -54,6 +54,7 @@ export function ComposerModelControl(props: {
       renderIcon={(size) =>
         badge?.showBadge ? (
           <ProviderInstanceIcon
+            acpRegistryAgentId={props.modelOption?.providerAgentId}
             iconUrl={props.modelOption?.providerIconUrl}
             provider={props.modelOption?.providerDriver}
             displayName={badge.displayName}
@@ -64,6 +65,8 @@ export function ComposerModelControl(props: {
           />
         ) : (
           <ProviderIcon
+            acpRegistryAgentId={props.modelOption?.providerAgentId}
+            displayName={props.modelOption?.providerLabel}
             iconUrl={props.modelOption?.providerIconUrl}
             provider={props.modelOption?.providerDriver}
             size={size}
