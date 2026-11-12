@@ -27,11 +27,29 @@ function stripLeadingQualifier(value: string, qualifier: string | null | undefin
   return value.replace(pattern, "").trim() || value;
 }
 
+const QUALIFIED_MODEL_NAME_SEPARATOR = " · ";
+
+/**
+ * Splits ACP model names shaped "Upstream label · model-id" (e.g. Hermes reports
+ * "OpenRouter · anthropic/claude-fable-5.2") so the model id can lead the row.
+ */
+export function splitQualifiedModelName(
+  name: string,
+): { readonly label: string; readonly modelId: string } | null {
+  const index = name.indexOf(QUALIFIED_MODEL_NAME_SEPARATOR);
+  if (index <= 0) return null;
+  const label = name.slice(0, index).trim();
+  const modelId = name.slice(index + QUALIFIED_MODEL_NAME_SEPARATOR.length).trim();
+  return label && modelId ? { label, modelId } : null;
+}
+
 export function getDisplayModelName(
   model: ModelEsque,
   options?: { preferShortName?: boolean },
 ): string {
   const name = options?.preferShortName && model.shortName ? model.shortName : model.name;
+  const qualified = splitQualifiedModelName(name);
+  if (qualified) return qualified.modelId;
   return stripLeadingQualifier(name, model.subProvider);
 }
 

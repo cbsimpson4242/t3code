@@ -155,6 +155,28 @@ describe("rankModelPickerSearch", () => {
     expect(search("moonshot")).toEqual(["Kimi K3", "Kimi K2.5", "Kimi K2"]);
   });
 
+  it("matches qualified ACP names on both the model id and the upstream label", () => {
+    const hermes: ReadonlyArray<CatalogModel> = [
+      {
+        driverKind: "acpRegistry",
+        providerDisplayName: "Hermes",
+        name: "OpenRouter · anthropic/claude-fable-5.2",
+        subProvider: "OpenRouter",
+      },
+      {
+        driverKind: "acpRegistry",
+        providerDisplayName: "Hermes",
+        name: "ChatGPT or Codex Subscription · gpt-6.1-sol",
+        subProvider: "ChatGPT or Codex Subscription",
+      },
+    ];
+    expect(search("fable-5.2", hermes)).toEqual(["OpenRouter · anthropic/claude-fable-5.2"]);
+    expect(search("codex subscription", hermes)).toEqual([
+      "ChatGPT or Codex Subscription · gpt-6.1-sol",
+    ]);
+    expect(search("gpt-6.1-sol", hermes)).toEqual(["ChatGPT or Codex Subscription · gpt-6.1-sol"]);
+  });
+
   it("ranks a favorite above newer models in the same family", () => {
     const models = catalog.map((model) =>
       model.name === "Claude Opus 4.5" ? { ...model, isFavorite: true } : model,

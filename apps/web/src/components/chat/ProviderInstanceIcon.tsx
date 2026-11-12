@@ -10,6 +10,8 @@ import { ProviderDriverKind } from "@t3tools/contracts";
 import { AntigravityIcon, ClaudeAI, Icon, OpenAI } from "../Icons";
 
 import { cn } from "~/lib/utils";
+import { isHermesAcpProvider } from "../../hermesProvider";
+import { HermesLogo } from "../HermesLogo";
 import { providerClients } from "../settings/providerDriverMeta";
 import { ProviderPackageIcon } from "./ProviderPackageIcon";
 import {
@@ -90,6 +92,15 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
     iconUrl: props.acpRegistryIconUrl,
   });
 
+  // Hermes is not in the ACP registry, so its artwork ships with the app. A registry icon always wins
+  // over the display-name fallback.
+  const isHermes =
+    isAcpRegistry &&
+    isHermesAcpProvider({
+      agentId: props.acpRegistryAgentId,
+      displayName: acpRegistryIconUrl === null ? props.displayName : undefined,
+    });
+
   return (
     <span
       className={cn(
@@ -99,7 +110,9 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
       style={accentStyle}
       data-provider-accent-color={accentColor}
     >
-      {isAcpRegistry ? (
+      {isHermes ? (
+        <HermesLogo className={cn("size-5", iconClassName)} />
+      ) : isAcpRegistry ? (
         <AcpRegistryAgentIcon
           className={cn("size-5 rounded-none bg-transparent", iconClassName)}
           fallbackClassName="size-full"
