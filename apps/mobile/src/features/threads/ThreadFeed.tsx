@@ -1,3 +1,5 @@
+import { parseVoiceMessageContent } from "@t3tools/shared/voiceMessage";
+import { VoiceMessagePlayer } from "./VoiceMessagePlayer";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
@@ -1873,7 +1875,10 @@ function renderFeedEntry(
     const { message } = entry;
     const isUser = message.role === "user";
     const presentation = resolveUserMessagePresentation(message);
-    const renderedText = renderAssistantCitationsAsText(presentation.text);
+    const voiceContent = isUser
+      ? { text: presentation.text, audioPaths: [] }
+      : parseVoiceMessageContent(presentation.text);
+    const renderedText = renderAssistantCitationsAsText(voiceContent.text);
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
     const timestampLabel = formatMessageTime(isUser ? message.createdAt : message.updatedAt);
     const attachments = message.attachments ?? [];
@@ -2269,6 +2274,16 @@ function renderFeedEntry(
             />
           </MarkdownImageAvailableWidthContext>
         ) : null}
+        {voiceContent.audioPaths.map((path, index) => (
+          <VoiceMessagePlayer
+            key={path}
+            id={`${props.environmentId}:${message.id}:${index}`}
+            environmentId={props.environmentId}
+            threadId={props.threadId}
+            path={path}
+            onPlaybackStart={props.onPlaybackStart}
+          />
+        ))}
         <MessageAttachmentList
           attachments={attachments}
           environmentId={props.environmentId}
