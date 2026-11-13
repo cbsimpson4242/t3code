@@ -108,4 +108,20 @@ describe("buildThreadActionMenuItems", () => {
     expect(items.find((item) => item.id === "archive")?.disabled).toBe(true);
     expect(items.find((item) => item.id === "turn-into-project")?.disabled).toBe(true);
   });
+
+  it("offers editing the thread only for No project threads, and not without permission", () => {
+    expect(buildThreadActionMenuItems(baseState).map((item) => item.id)).not.toContain(
+      "edit-thread",
+    );
+    const items = buildThreadActionMenuItems({ ...baseState, canEditThread: true });
+    expect(items.find((item) => item.id === "edit-thread")).toMatchObject({
+      label: "Edit thread…",
+    });
+    const readOnly = buildThreadActionMenuItems({
+      ...baseState,
+      canEditThread: true,
+      canOperate: false,
+    });
+    expect(readOnly.find((item) => item.id === "edit-thread")?.disabled).toBe(true);
+  });
 });

@@ -140,6 +140,7 @@ export function useCommandPaletteThreadItems(input: {
       return (
         <ThreadCommandSubtitle
           project={projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null}
+          threadIcon={thread.icon}
           projectTitle={projectTitle ?? null}
           environmentLabel={
             projectEnvironmentLocationById.get(thread.environmentId)?.label ?? "Remote"

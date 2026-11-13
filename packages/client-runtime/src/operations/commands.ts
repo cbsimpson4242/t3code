@@ -1,5 +1,6 @@
 import { remapComposerContextAttachments } from "@t3tools/shared/composerContextReferences";
 import {
+  type ThreadIcon,
   type ThreadLinkedPullRequest,
   CommandId,
   CheckpointId,
@@ -129,6 +130,7 @@ export type MarkThreadUnreadInput = ThreadCommandInput;
 export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly limitRecovery?: import("@t3tools/contracts").OrchestrationV2LimitRecoveryUpdate | null;
   readonly title?: string;
+  readonly icon?: ThreadIcon | null;
   readonly modelSelection?: ModelSelection;
   readonly branch?: string | null;
   readonly worktreePath?: string | null;
@@ -612,6 +614,7 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
     let result = null;
     if (
       input.title !== undefined ||
+      input.icon !== undefined ||
       input.branch !== undefined ||
       input.worktreePath !== undefined ||
       input.regenerateTitle !== undefined ||
@@ -624,6 +627,7 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
         commandId,
         threadId: input.threadId,
         ...(input.title === undefined ? {} : { title: input.title }),
+        ...(input.icon === undefined ? {} : { icon: input.icon }),
         ...(input.branch === undefined ? {} : { branch: input.branch }),
         ...(input.worktreePath === undefined ? {} : { worktreePath: input.worktreePath }),
         ...(input.expectedEmpty === true ? { expectedEmpty: true } : {}),

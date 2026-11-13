@@ -11,7 +11,7 @@ vi.mock("@effect/atom-react", async (importOriginal) => ({
   useAtomSet: () => (value: unknown) => harness.saved.push(value),
 }));
 
-import { HomeListOptionsProvider, useHomeListOptions } from "./home-list-options";
+import { HomeListOptionsProvider, savedProjectKeys, useHomeListOptions } from "./home-list-options";
 
 const ENVIRONMENT = "env-1" as EnvironmentId;
 const AVAILABLE = new Set([ENVIRONMENT]);
@@ -37,13 +37,44 @@ it("saves the scope from every update made in one event", async () => {
   );
   act(() => {
     controls!.setSelectedEnvironmentId(ENVIRONMENT);
-    controls!.setSelectedProjectKey("env-1:project-1");
+    controls!.setSelectedProjectKeys(["env-1:project-1"]);
   });
 
   expect(harness.saved.at(-1)).toEqual({
-    threadListFilters: { environmentId: ENVIRONMENT, projectKey: "env-1:project-1" },
+    threadListFilters: {
+      environmentId: ENVIRONMENT,
+      projectKey: "env-1:project-1",
+      projectKeys: ["env-1:project-1"],
+    },
   });
   expect(controls!.options.selectedEnvironmentId).toBe(ENVIRONMENT);
-  expect(controls!.options.selectedProjectKey).toBe("env-1:project-1");
+  expect(controls!.options.selectedProjectKeys).toEqual(["env-1:project-1"]);
+
+  act(() => controls!.setSelectedProjectKeys(["env-1:project-1", "env-1:project-2"]));
+  expect(harness.saved.at(-1)).toEqual({
+    threadListFilters: {
+      environmentId: ENVIRONMENT,
+      projectKey: null,
+      projectKeys: ["env-1:project-1", "env-1:project-2"],
+    },
+  });
   act(() => root.unmount());
+});
+
+it("restores a saved filter, reading the one-project shape older builds saved", () => {
+  expect(savedProjectKeys(undefined)).toEqual([]);
+  expect(savedProjectKeys({ environmentId: null, projectKey: null })).toEqual([]);
+  expect(savedProjectKeys({ environmentId: null, projectKey: "env-1:project-1" })).toEqual([
+    "env-1:project-1",
+  ]);
+  expect(
+    savedProjectKeys({
+      environmentId: null,
+      projectKey: null,
+      projectKeys: ["env-1:project-1", "env-1:project-2"],
+    }),
+  ).toEqual(["env-1:project-1", "env-1:project-2"]);
+  expect(savedProjectKeys({ environmentId: null, projectKey: "legacy", projectKeys: [] })).toEqual(
+    [],
+  );
 });

@@ -10,6 +10,7 @@ import {
   deleteSelectedThreadEntries,
   getFallbackThreadIdAfterDelete,
   hasUnseenCompletion,
+  isRunCompletionSeen,
   resolveSidebarRowThreadId,
   belongsInSidebarWorkingShelf,
   isSidebarEnvironmentDisconnected,
@@ -1865,5 +1866,55 @@ describe("delegated work keeps a parent busy", () => {
       }),
     ]);
     expect(completed.size).toBe(0);
+  });
+});
+
+describe("isRunCompletionSeen", () => {
+  const finishedAt = Date.parse("2026-03-09T10:03:10.000Z");
+  const visit = (offsetSeconds: number) =>
+    new Date(finishedAt + offsetSeconds * 1_000).toISOString();
+
+  it("is seen when the run finished before the visit", () => {
+    expect(
+      isRunCompletionSeen({ completionMs: finishedAt, lastVisitedAt: visit(5), viewing: false }),
+    ).toBe(true);
+  });
+
+  it("is seen when the visit landed at the instant the run finished", () => {
+    expect(
+      isRunCompletionSeen({ completionMs: finishedAt, lastVisitedAt: visit(0), viewing: false }),
+    ).toBe(true);
+  });
+
+  it("is unseen when the run finished after the visit, so a new completion turns green again", () => {
+    expect(
+      isRunCompletionSeen({ completionMs: finishedAt, lastVisitedAt: visit(-5), viewing: false }),
+    ).toBe(false);
+  });
+
+  it("is seen while the thread is open, even before the visit watermark catches up", () => {
+    expect(
+      isRunCompletionSeen({ completionMs: finishedAt, lastVisitedAt: visit(-30), viewing: true }),
+    ).toBe(true);
+    expect(
+      isRunCompletionSeen({ completionMs: finishedAt, lastVisitedAt: undefined, viewing: true }),
+    ).toBe(true);
+  });
+
+  it("is unseen for a thread that was never visited", () => {
+    for (const lastVisitedAt of [undefined, null, ""]) {
+      expect(isRunCompletionSeen({ completionMs: finishedAt, lastVisitedAt, viewing: false })).toBe(
+        false,
+      );
+    }
+  });
+
+  it("is unseen when the visit time cannot be read or the run has no end", () => {
+    expect(
+      isRunCompletionSeen({ completionMs: finishedAt, lastVisitedAt: "garbage", viewing: false }),
+    ).toBe(false);
+    expect(
+      isRunCompletionSeen({ completionMs: null, lastVisitedAt: visit(5), viewing: false }),
+    ).toBe(false);
   });
 });

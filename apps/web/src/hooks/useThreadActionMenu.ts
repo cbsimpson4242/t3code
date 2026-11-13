@@ -1,5 +1,6 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
+import { openEditThreadDialog } from "../components/EditThreadDialog";
 import { openGuestShareDialog } from "../components/chat/guestShareDialogState";
 import {
   type AtomCommandResult,
@@ -150,6 +151,11 @@ export function useThreadActionMenu(input: {
         snoozePresets,
         canShareWithGuest,
         canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+        canEditThread:
+          projects.find(
+            (candidate) =>
+              candidate.environmentId === thread.environmentId && candidate.id === thread.projectId,
+          )?.isScratch === true,
       });
       const clicked = await settlePromise(() => api.contextMenu.show(items, position));
       if (clicked._tag === "Failure" || clicked.value === null) return;
@@ -259,6 +265,9 @@ export function useThreadActionMenu(input: {
           return;
         case "rename":
           onStartRename();
+          return;
+        case "edit-thread":
+          openEditThreadDialog(threadRef);
           return;
         case "regenerate-title":
           if (isRegeneratingTitle) return;

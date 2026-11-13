@@ -3,7 +3,7 @@ import { AppText } from "./ui/AppText";
 import { Image } from "expo-image";
 import { memo, useLayoutEffect, useState } from "react";
 import { View } from "react-native";
-import type { EnvironmentId, ProjectIconOverride } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectIconOverride, ThreadIcon } from "@t3tools/contracts";
 import {
   getProjectFaviconCacheKey,
   getProjectFaviconResourceKey,
@@ -39,6 +39,8 @@ export const ProjectFavicon = memo(function ProjectFavicon(props: {
   readonly workspaceRoot?: string | null;
   readonly faviconPath?: string | null;
   readonly projectIcon?: ProjectIconOverride | null;
+  /** The icon chosen for a No project thread, shown in place of the project's logo. */
+  readonly threadIcon?: ThreadIcon | null;
 }) {
   const size = props.size ?? 42;
   const symbol = resolveProjectIconSymbol(props.projectIcon);
@@ -60,6 +62,24 @@ export const ProjectFavicon = memo(function ProjectFavicon(props: {
         ? getProjectFaviconResourceKey(props.environmentId, props.workspaceRoot, props.faviconPath)
         : getProjectFaviconCacheKey(props.environmentId, props.workspaceRoot, renderableFaviconUrl)
       : null;
+
+  if (props.threadIcon?.kind === "emoji") {
+    return (
+      <ProjectIconGlyphView glyph={{ kind: "emoji", emoji: props.threadIcon.emoji }} size={size} />
+    );
+  }
+
+  if (props.threadIcon?.kind === "image") {
+    return (
+      <Image
+        source={{ uri: props.threadIcon.dataUrl }}
+        cachePolicy="memory"
+        accessibilityLabel="Thread icon"
+        style={{ width: size, height: size, borderRadius: size * 0.25 }}
+        contentFit="cover"
+      />
+    );
+  }
 
   if (symbol !== null) {
     return (

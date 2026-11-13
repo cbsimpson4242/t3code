@@ -397,3 +397,26 @@ export function sortProjectsByGroupOrder<
     rankByProject.get(`${project.environmentId}\0${project.id}`) ?? groups.length;
   return [...projects].sort((left, right) => rankOf(left) - rankOf(right));
 }
+
+/** A project filter is a set of project scope keys; empty means every project. */
+export function toggleProjectScopeKey(keys: ReadonlyArray<string>, key: string): string[] {
+  return keys.includes(key) ? keys.filter((candidate) => candidate !== key) : [...keys, key];
+}
+
+/** Drops keys whose project is gone, so a stored filter never hides every thread. */
+export function retainKnownProjectScopeKeys(
+  keys: ReadonlyArray<string>,
+  knownKeys: ReadonlyArray<string>,
+): string[] {
+  return [...new Set(keys)].filter((key) => knownKeys.includes(key));
+}
+
+/** "PowerCore, T3 Mods +1": the first names, then how many more are selected. */
+export function formatProjectScopeSummary(
+  labels: ReadonlyArray<string>,
+  maxNames = 2,
+): string | null {
+  if (labels.length === 0) return null;
+  const shown = labels.slice(0, maxNames).join(", ");
+  return labels.length > maxNames ? `${shown} +${labels.length - maxNames}` : shown;
+}

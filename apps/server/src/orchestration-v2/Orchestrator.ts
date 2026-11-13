@@ -192,6 +192,8 @@ import { planThreadDeletion } from "./ThreadDeletion.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../serverSettings.ts";
 
+// Grapheme counting stays out of contracts: Hermes, which runs them on mobile, has no Intl.Segmenter.
+const threadIconEmojiSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 const isMessageQuestionAnswer = Schema.is(
   Schema.Union([TrimmedNonEmptyString, Schema.NonEmptyArray(TrimmedNonEmptyString)]),
 );
@@ -3214,6 +3216,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     if (
       command.type === "thread.metadata.update" &&
+      command.icon?.kind === "emoji" &&
+      Array.from(threadIconEmojiSegmenter.segment(command.icon.emoji)).length !== 1
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "A thread emoji icon must be a single emoji.",
+      });
+    }
+    if (
+      command.type === "thread.metadata.update" &&
       command.expectedBranch !== undefined &&
       command.expectedBranch !== thread.branch
     ) {
@@ -3694,6 +3707,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return {
             ...thread,
             ...(command.title === undefined ? {} : { title: command.title }),
+            ...(command.icon === undefined ? {} : { icon: command.icon }),
             ...(command.limitRecovery === undefined ? {} : { limitRecovery }),
             ...(command.limitRecovery !== undefined &&
             limitRecovery?.snooze === true &&

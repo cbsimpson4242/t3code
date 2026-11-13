@@ -106,8 +106,10 @@ import { readLocalApi } from "../localApi";
 import { configuredHostedAppUrl } from "../hostedPairing";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import {
+  formatProjectScopeSummary,
   pickableProjectGroups,
   selectProjectGroupingSettings,
+  toggleProjectScopeKey as toggleScopeKey,
 } from "@t3tools/client-runtime/state/project-grouping";
 import {
   projectGroupsSpanEnvironments,
@@ -162,6 +164,7 @@ import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
+import { openEditThreadDialog } from "./EditThreadDialog";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
 import {
   buildThreadRouteParams,
@@ -1186,11 +1189,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const projectScopeKeys = revealWidensScope ? [] : chosenProjectScopeKeys;
   const projectScopeKey = projectScopeKeys.length === 0 ? null : projectScopeKeys.join("\n");
   const toggleProjectScopeKey = (key: string) =>
-    setProjectScopeKeys(
-      projectScopeKeys.includes(key)
-        ? projectScopeKeys.filter((candidate) => candidate !== key)
-        : [...projectScopeKeys, key],
-    );
+    setProjectScopeKeys(toggleScopeKey(projectScopeKeys, key));
   // The widened scope outlives the reveal, so it is written back to the persisted
   // scope. Route changes arrive from history, links and the palette, and only this
   // component holds the project groups that decide a widening, so no single
@@ -1222,11 +1221,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     (item) => item.value,
     projectScopeMenuState.open,
   );
-  const selectedProjectScopeItem =
-    projectScopeKeys.length > 1
-      ? null
-      : (projectScopeItems.find((item) => item.value === (projectScopeKeys[0] ?? "all")) ??
-        projectScopeItems[0]!);
   const filteredProjectScopeItems = filterSidebarProjectScopeItems({
     items: projectScopeItems,
     query: projectScopeMenuState.query,
@@ -1234,6 +1228,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       projectScopeFilter.contains(item, query, (candidate) => candidate.label),
   });
   const scopedProjectGroups = revealWidensScope ? [] : chosenProjectGroups;
+  const projectScopeSummary = formatProjectScopeSummary(
+    scopedProjectGroups.map((project) => project.displayName),
+  );
   const scopedProjectRefs = scopedProjectGroups.flatMap((project) => project.memberProjectRefs);
   const scopedProjectKeys = revealWidensScope ? null : chosenScopeProjectKeys;
   const threadSearch = useThreadSearch(
@@ -2704,6 +2701,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 canShareWithGuestAtom(threadRef.environmentId),
               ),
               canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+              canEditThread:
+                projectByKey.get(`${thread.environmentId}:${thread.projectId}`)?.isScratch === true,
               supports: {
                 settlement: configLoaded,
                 autoSettleOptOut: supportsAutoSettleOptOut,
@@ -2740,6 +2739,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   : [threadProjectGroup.projectKey],
               );
             }
+            return;
+          case "edit-thread":
+            openEditThreadDialog(threadRef);
             return;
           case "project-settings":
             if (threadProjectGroup)
@@ -3094,7 +3096,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   onItemHighlighted={(item) => {
                     highlightedProjectScopeKeyRef.current = item?.value ?? null;
                   }}
-                  value={selectedProjectScopeItem}
+                  // Selection lives in the persisted scope, so every pick reads as a change.
+                  value={null}
                   onValueChange={(item, eventDetails) => {
                     if (suppressNextScopeChangeRef.current) {
                       suppressNextScopeChangeRef.current = false;
@@ -3103,15 +3106,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     if (!item) return;
                     if (item.value === "all") {
                       setProjectScopeKeys([]);
-                    } else if (
-                      eventDetails.event instanceof MouseEvent &&
-                      eventDetails.event.shiftKey
-                    ) {
+                    } else {
                       // Canceling skips Base UI's commit, which would freeze the search query, and its close.
                       eventDetails.cancel();
                       toggleProjectScopeKey(item.value);
-                    } else {
-                      setProjectScopeKeys([item.value]);
                     }
                   }}
                 >
@@ -3123,6 +3121,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             ? `Filter threads by project: ${scopedProjectGroups.map((project) => project.displayName).join(", ")}`
                             : "Filter threads by project"
                         }
+                        tooltip={projectScopeSummary ?? "Filter threads by project"}
                       />
                     }
                   >

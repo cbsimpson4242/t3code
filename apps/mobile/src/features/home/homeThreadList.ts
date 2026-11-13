@@ -1,4 +1,8 @@
-import { buildProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
+import {
+  buildProjectGroups,
+  resolveScratchProjectScopeKey,
+  retainKnownProjectScopeKeys,
+} from "@t3tools/client-runtime/state/project-grouping";
 import type {
   EnvironmentProject,
   EnvironmentThreadShell,
@@ -86,6 +90,40 @@ export function findHomeProjectScope(
     ) ??
     null
   );
+}
+
+/**
+ * A saved filter as the list shows it: a per-environment No project key saved by an older build
+ * becomes the shared No project scope, and keys of projects that are gone drop. The saved value is
+ * only rewritten when the user changes the filter.
+ */
+export function resolveHomeProjectKeys(input: {
+  readonly keys: ReadonlyArray<string>;
+  readonly projects: ReadonlyArray<EnvironmentProject>;
+  readonly projectGroupingMode: SidebarProjectGroupingMode;
+  readonly knownKeys: ReadonlyArray<string>;
+}): string[] {
+  const settings = {
+    sidebarProjectGroupingMode: input.projectGroupingMode,
+    sidebarProjectGroupingOverrides: {},
+  };
+  return retainKnownProjectScopeKeys(
+    input.keys.map((key) => resolveScratchProjectScopeKey(key, input.projects, settings) ?? key),
+    input.knownKeys,
+  );
+}
+
+/** The scopes a multi-project filter selects; a key whose project is gone selects nothing. */
+export function findHomeProjectScopes(
+  scopes: ReadonlyArray<HomeProjectScope>,
+  keys: ReadonlyArray<string>,
+): ReadonlyArray<HomeProjectScope> {
+  const found = new Set<HomeProjectScope>();
+  for (const key of keys) {
+    const scope = findHomeProjectScope(scopes, key);
+    if (scope !== null) found.add(scope);
+  }
+  return [...found];
 }
 
 export function sortHomeProjectScopes(input: {

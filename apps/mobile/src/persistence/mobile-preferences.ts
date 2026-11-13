@@ -14,6 +14,7 @@ import {
   type PullRequestMergeMethod,
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
+import { sanitizeRecentThreadEmojis } from "@t3tools/client-runtime/state/thread-icon";
 import type { AndroidNavigationStyle } from "../lib/androidNavigationStyle";
 import type { ComposerEnterBehavior } from "../lib/composerEnterBehavior";
 import type { FollowUpBehavior } from "../lib/followUpBehavior";
@@ -38,7 +39,9 @@ export type PullRequestListControls = typeof PullRequestListControls.Type;
 
 const ThreadListFilters = Schema.Struct({
   environmentId: Schema.NullOr(EnvironmentId),
+  /** The one-project filter older builds saved and still read; `projectKeys` wins when present. */
   projectKey: Schema.NullOr(Schema.String),
+  projectKeys: Schema.optional(Schema.Array(Schema.String)),
 });
 export type ThreadListFilters = typeof ThreadListFilters.Type;
 
@@ -129,6 +132,8 @@ export interface Preferences {
   readonly threadListSnoozedShelfExpanded?: boolean;
   readonly threadListWorkingShelfExpanded?: boolean;
   readonly threadListFilters?: ThreadListFilters;
+  /** Emoji last chosen as a thread icon, newest first. */
+  readonly recentThreadEmojis?: readonly string[];
   readonly pullRequestListFilters?: PullRequestListPreferences;
   readonly workspaceSelections?: WorkspaceSelections;
 }
@@ -208,6 +213,7 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     threadListSnoozedShelfExpanded?: boolean;
     threadListWorkingShelfExpanded?: boolean;
     threadListFilters?: ThreadListFilters;
+    recentThreadEmojis?: readonly string[];
     pullRequestListFilters?: PullRequestListPreferences;
     workspaceSelections?: WorkspaceSelections;
   } = {};
@@ -363,6 +369,9 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (isThreadListFilters(parsed.threadListFilters)) {
     preferences.threadListFilters = parsed.threadListFilters;
+  }
+  if (Array.isArray(parsed.recentThreadEmojis)) {
+    preferences.recentThreadEmojis = sanitizeRecentThreadEmojis(parsed.recentThreadEmojis);
   }
   if (isPullRequestListPreferences(parsed.pullRequestListFilters)) {
     preferences.pullRequestListFilters = parsed.pullRequestListFilters;

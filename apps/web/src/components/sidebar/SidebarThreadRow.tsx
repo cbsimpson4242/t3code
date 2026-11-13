@@ -78,6 +78,7 @@ import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import {
   animateSidebarLayoutChanges,
   hasUnseenCompletion,
+  isRunCompletionSeen,
   resolveSidebarRowAccessibility,
   type SidebarDropVerb,
   hasRunningDelegatedWork,
@@ -104,6 +105,7 @@ import {
 import { pickSnoozePreset, resolveSnoozePresets, type SnoozePreset } from "../Sidebar.snooze";
 import { useThreadShell } from "../../state/entities";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
+import { ThreadLogo } from "../ThreadLogo";
 import { ThreadSearchMatchExcerpt } from "../ThreadSearchMatch";
 import { makeWorkspaceFileDropHandlers } from "../chat/workspaceFileDrop";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
@@ -751,6 +753,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     fullCompletionMs,
     showFinished: true,
   });
+  // Done turns gray once the user has looked at the thread: they are on it, or visited at or
+  // after the run fully ended. Provider-native subagent ends are seen only by this row's clock,
+  // not the server, so they are left out; the visit watermark could not otherwise catch up.
+  const finishedRunSeen =
+    runTimer?.phase === "done" &&
+    runTimer.startedAtMs !== null &&
+    isRunCompletionSeen({
+      completionMs: resolveFullCompletionMs({
+        thread,
+        descendantCompletedAt: props.descendantCompletedAt,
+        observedEndedAtMs: null,
+      }),
+      lastVisitedAt,
+      viewing: props.isRouteThread,
+    });
   const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
   const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
   const isWoke =
@@ -826,13 +843,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                             className: "text-muted-foreground",
                           }
                         : runTimer?.phase === "done" || isUnread
-                          ? {
-                              label: "Done",
-                              icon: "done" as const,
-                              className: "text-success-foreground",
-                            }
+                          ? finishedRunSeen
+                            ? {
+                                // Only the time stays visible; the label is for screen readers.
+                                label: "Done, seen",
+                                icon: "done" as const,
+                                className: "text-muted-foreground",
+                              }
+                            : {
+                                label: "Done",
+                                icon: "done" as const,
+                                className: "text-success-foreground",
+                              }
                           : null;
   const isWokeStatus = topStatus?.icon === "woke";
+  const isDoneSeen = finishedRunSeen && topStatus?.icon === "done";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
     effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
@@ -1300,7 +1325,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   className="sidebar-working-ring pointer-events-none absolute inset-0 rounded-full text-info-foreground motion-safe:visible-animate-spin"
                 />
               ) : null}
-              {props.project ? <ProjectFavicon project={props.project} className="size-5" /> : null}
+              <ThreadLogo icon={thread.icon} project={props.project} className="size-5" />
             </span>
             {runTimer !== null ? (
               // Over the tile's corner, so the logo and title keep their place.
@@ -1313,7 +1338,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   topStatus?.className ?? "text-info-foreground",
                 )}
               >
-                {topStatus && ["done", "cancelled", "failed"].includes(runTimer.phase) ? (
+                {topStatus &&
+                !isDoneSeen &&
+                ["done", "cancelled", "failed"].includes(runTimer.phase) ? (
                   <TopStatusIcon icon={topStatus.icon} className="size-2.5" />
                 ) : null}
                 <SidebarRunDuration timer={runTimer} />
@@ -1382,9 +1409,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {accessibleTitle}
               {inFolder ? null : (
                 <span data-thread-logo="" className="flex shrink-0 items-center">
-                  {props.project ? (
-                    <ProjectFavicon project={props.project} className="size-4" />
-                  ) : null}
+                  <ThreadLogo icon={thread.icon} project={props.project} className="size-4" />
                 </span>
               )}
               {draftIndicator}
@@ -1444,8 +1469,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           topStatus.className,
                         )}
                       >
-                        <TopStatusIcon icon={topStatus.icon} className="size-3" />
-                        {topStatus.label}
+                        {isDoneSeen ? null : (
+                          <TopStatusIcon icon={topStatus.icon} className="size-3" />
+                        )}
+                        {isDoneSeen ? (
+                          <span className="sr-only">{topStatus.label}</span>
+                        ) : (
+                          topStatus.label
+                        )}
                         {runTimer !== null ? (
                           <span aria-hidden>
                             <SidebarRunDuration timer={runTimer} />
@@ -1586,7 +1617,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {draftIndicator}
               {props.project ? (
                 <span data-thread-logo="" className="contents">
-                  <ProjectFavicon project={props.project} className="size-4 shrink-0" />
+                  <ThreadLogo
+                    icon={thread.icon}
+                    project={props.project}
+                    className="size-4 shrink-0"
+                  />
                 </span>
               ) : null}
               {/* Left of the status slot, the pin would slide when hover swaps the
@@ -1648,11 +1683,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                             topStatus.className,
                           )}
                         >
-                          <TopStatusIcon icon={topStatus.icon} className="size-4" />
+                          {isDoneSeen ? null : (
+                            <TopStatusIcon icon={topStatus.icon} className="size-4" />
+                          )}
                           {/* Not a live region: a collapsed sidebar is inert, so
                             BackgroundThreadAnnouncer and the open thread's
                             timeline speak status changes instead. */}
-                          {topStatus.label}
+                          {isDoneSeen ? (
+                            <span className="sr-only">{topStatus.label}</span>
+                          ) : (
+                            topStatus.label
+                          )}
                           {runTimer !== null ? (
                             <span aria-hidden>
                               <SidebarRunDuration timer={runTimer} />
@@ -1869,9 +1910,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
             />
           }
         >
-          {props.project ? (
-            <ProjectFavicon project={props.project} className="size-4 shrink-0" />
-          ) : null}
+          <ThreadLogo icon={thread.icon} project={props.project} className="size-4 shrink-0" />
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="flex min-w-0 items-center gap-2.5">
               <span

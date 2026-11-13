@@ -21,6 +21,7 @@ function toNativeHeaderMenuItems(items: HomeListFilterMenu["items"]): NativeHead
           label: item.title,
           description: item.subtitle,
           onPress: item.onPress,
+          ...(item.keepsMenuPresented ? { keepsMenuPresented: true } : {}),
           state: item.state === "on" ? ("on" as const) : undefined,
         }
       : {

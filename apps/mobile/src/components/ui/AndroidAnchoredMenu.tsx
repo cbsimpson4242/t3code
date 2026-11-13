@@ -127,7 +127,7 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
       setPath((current) => [...current, action]);
       return;
     }
-    close();
+    if (action.attributes?.keepsMenuPresented !== true) close();
     if (action.id !== undefined) {
       props.onPressAction?.({
         nativeEvent: { event: action.id },
