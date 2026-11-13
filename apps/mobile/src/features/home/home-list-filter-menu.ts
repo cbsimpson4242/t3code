@@ -1,3 +1,4 @@
+import { toggleProjectScopeKey } from "@t3tools/client-runtime/state/project-grouping";
 import type { EnvironmentId } from "@t3tools/contracts";
 
 export interface HomeListFilterMenuEnvironment {
@@ -15,6 +16,8 @@ type HomeListFilterMenuAction = {
   readonly title: string;
   readonly subtitle?: string;
   readonly state?: "on" | "off";
+  /** A toggle row leaves the menu open so several can be flipped in a row. */
+  readonly keepsMenuPresented?: boolean;
   readonly onPress: () => void;
 };
 
@@ -33,9 +36,9 @@ export function buildHomeListFilterMenu(props: {
   readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
   readonly selectedEnvironmentId: EnvironmentId | null;
-  readonly selectedProjectKey: string | null;
+  readonly selectedProjectKeys: ReadonlyArray<string>;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
-  readonly onProjectChange: (projectKey: string | null) => void;
+  readonly onProjectChange: (projectKeys: ReadonlyArray<string>) => void;
 }): HomeListFilterMenu {
   const items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu> = [];
 
@@ -71,14 +74,18 @@ export function buildHomeListFilterMenu(props: {
           type: "action",
           title: "All projects",
           subtitle: "Show threads from every project",
-          state: props.selectedProjectKey === null ? "on" : "off",
-          onPress: () => props.onProjectChange(null),
+          state: props.selectedProjectKeys.length === 0 ? "on" : "off",
+          onPress: () => props.onProjectChange([]),
         },
         ...props.projects.map((project) => ({
           type: "action" as const,
           title: project.label,
-          state: props.selectedProjectKey === project.key ? ("on" as const) : ("off" as const),
-          onPress: () => props.onProjectChange(project.key),
+          state: props.selectedProjectKeys.includes(project.key)
+            ? ("on" as const)
+            : ("off" as const),
+          keepsMenuPresented: true,
+          onPress: () =>
+            props.onProjectChange(toggleProjectScopeKey(props.selectedProjectKeys, project.key)),
         })),
       ],
     });

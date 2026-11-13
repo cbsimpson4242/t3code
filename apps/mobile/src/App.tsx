@@ -22,6 +22,7 @@ import { DEFAULT_HOSTED_APP_URL } from "@t3tools/shared/connectAuth";
 
 import { RegistryContext } from "@effect/atom-react";
 import { ProjectChipIconRasterizer } from "./native/ProjectChipIconImages";
+import { EditThreadSheetHost } from "./features/threads/EditThreadSheet";
 import { ThreadArrangementHost } from "./features/threads/ThreadArrangementSheet";
 import * as Dialog from "./components/ui/Dialog";
 import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
@@ -249,6 +250,7 @@ function AppContent() {
                 />
                 <Dialog.Host />
                 <ThreadArrangementHost />
+                <EditThreadSheetHost />
                 <ProjectChipIconRasterizer />
               </NativeLayoutMetricsProvider>
             </GlobalVoiceInputControl>

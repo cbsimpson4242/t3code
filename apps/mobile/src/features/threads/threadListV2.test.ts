@@ -41,6 +41,7 @@ import {
   resolveThreadListV2WokeAt,
   sortThreadsForListV2,
   threadListV2ListItemsAreEqual,
+  isThreadRunCompletionSeen,
   threadHasUnseenCompletion,
   type ThreadListV2ListItem,
 } from "./threadListV2";
@@ -1863,5 +1864,76 @@ describe("pinned shelf", () => {
       expect(pages.pinnedCount).toBe(0);
       expect(names(pages.threads)).toEqual(names(items));
     });
+  });
+});
+
+describe("isThreadRunCompletionSeen", () => {
+  const finishedAt = Date.parse("2026-03-09T10:03:10.000Z");
+  const visit = (offsetSeconds: number) =>
+    new Date(finishedAt + offsetSeconds * 1_000).toISOString();
+
+  it("is seen when the run finished before the visit", () => {
+    expect(
+      isThreadRunCompletionSeen({
+        completionMs: finishedAt,
+        lastVisitedAt: visit(5),
+        viewing: false,
+      }),
+    ).toBe(true);
+    expect(
+      isThreadRunCompletionSeen({
+        completionMs: finishedAt,
+        lastVisitedAt: visit(0),
+        viewing: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("is unseen when the run finished after the visit, so a new completion turns green again", () => {
+    expect(
+      isThreadRunCompletionSeen({
+        completionMs: finishedAt,
+        lastVisitedAt: visit(-5),
+        viewing: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("is seen while the thread is open, even before the visit watermark catches up", () => {
+    expect(
+      isThreadRunCompletionSeen({
+        completionMs: finishedAt,
+        lastVisitedAt: visit(-30),
+        viewing: true,
+      }),
+    ).toBe(true);
+    expect(
+      isThreadRunCompletionSeen({
+        completionMs: finishedAt,
+        lastVisitedAt: undefined,
+        viewing: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("is unseen for a thread that was never visited", () => {
+    for (const lastVisitedAt of [undefined, null, ""]) {
+      expect(
+        isThreadRunCompletionSeen({ completionMs: finishedAt, lastVisitedAt, viewing: false }),
+      ).toBe(false);
+    }
+  });
+
+  it("is unseen when the visit time cannot be read or the run has no end", () => {
+    expect(
+      isThreadRunCompletionSeen({
+        completionMs: finishedAt,
+        lastVisitedAt: "garbage",
+        viewing: false,
+      }),
+    ).toBe(false);
+    expect(
+      isThreadRunCompletionSeen({ completionMs: null, lastVisitedAt: visit(5), viewing: false }),
+    ).toBe(false);
   });
 });

@@ -206,6 +206,24 @@ export function threadHasUnseenCompletion(
   return completedAtMs > lastVisitedAtMs;
 }
 
+/**
+ * Whether the user has already looked at a finished run, for the Done label: they are on the
+ * thread now, or visited it at or after the run ended. A thread never visited, or whose visit
+ * time is unreadable, is unseen. Unlike `threadHasUnseenCompletion`, which stays quiet for
+ * unopened threads, Done is always shown, so an unopened thread must read as unseen.
+ */
+export function isThreadRunCompletionSeen(input: {
+  readonly completionMs: number | null;
+  readonly lastVisitedAt: string | null | undefined;
+  readonly viewing: boolean;
+}): boolean {
+  if (input.viewing) return true;
+  if (input.completionMs === null || !input.lastVisitedAt) return false;
+  const lastVisitedAtMs = Date.parse(input.lastVisitedAt);
+  if (Number.isNaN(lastVisitedAtMs)) return false;
+  return input.completionMs <= lastVisitedAtMs;
+}
+
 export function resolveThreadListV2WokeAt(
   thread: EnvironmentThreadShell,
   options: { readonly now: string },

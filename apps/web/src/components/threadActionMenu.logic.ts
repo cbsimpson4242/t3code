@@ -19,6 +19,7 @@ export type ThreadActionMenuId =
   | `snooze:${string}`
   | "unsnooze"
   | "rename"
+  | "edit-thread"
   | "regenerate-title"
   | "mark-unread"
   | "share-guest"
@@ -96,6 +97,8 @@ export interface ThreadActionMenuState {
   readonly canShareWithGuest?: boolean;
   /** A No project thread with its own folder, on a server that can promote it. */
   readonly canTurnIntoProject?: boolean;
+  /** Only No project threads have an icon to choose. */
+  readonly canEditThread?: boolean;
 }
 
 /** Local navigation, read markers, and copying remain available to read-only clients. */
@@ -184,6 +187,9 @@ export function buildThreadActionMenuItems(
         ]
       : []),
     { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
+    ...(state.canEditThread
+      ? [{ id: "edit-thread" as const, label: "Edit thread…", icon: "message-square" }]
+      : []),
     ...(state.supports.titleRegeneration
       ? [
           {

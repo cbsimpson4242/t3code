@@ -9,7 +9,10 @@ import {
   pickableProjectGroups,
   derivePhysicalProjectKey,
   resolveScratchProjectScopeKey,
+  formatProjectScopeSummary,
+  retainKnownProjectScopeKeys,
   sortProjectsByGroupOrder,
+  toggleProjectScopeKey,
   type ProjectGroupingSettings,
 } from "./projectGrouping.ts";
 
@@ -419,5 +422,31 @@ describe("sortProjectsByGroupOrder", () => {
       [{ memberProjectRefs: [ref("shared", remote)] }, { memberProjectRefs: [ref("shared")] }],
     );
     expect(sorted.map((entry) => entry.environmentId)).toEqual([remote, environmentId]);
+  });
+});
+
+describe("project scope filter", () => {
+  it("toggles keys on and off, keeping the order they were chosen in", () => {
+    expect(toggleProjectScopeKey([], "a")).toEqual(["a"]);
+    expect(toggleProjectScopeKey(["a"], "b")).toEqual(["a", "b"]);
+    expect(toggleProjectScopeKey(["a", "b"], "a")).toEqual(["b"]);
+    expect(toggleProjectScopeKey(["a"], "a")).toEqual([]);
+  });
+
+  it("drops keys of projects that no longer exist, and duplicates", () => {
+    expect(retainKnownProjectScopeKeys(["a", "gone", "b", "a"], ["a", "b", "c"])).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(retainKnownProjectScopeKeys(["gone"], ["a"])).toEqual([]);
+  });
+
+  it("summarizes the selection by name, then by count", () => {
+    expect(formatProjectScopeSummary([])).toBeNull();
+    expect(formatProjectScopeSummary(["PowerCore"])).toBe("PowerCore");
+    expect(formatProjectScopeSummary(["PowerCore", "T3 Mods"])).toBe("PowerCore, T3 Mods");
+    expect(formatProjectScopeSummary(["PowerCore", "T3 Mods", "No project"])).toBe(
+      "PowerCore, T3 Mods +1",
+    );
   });
 });

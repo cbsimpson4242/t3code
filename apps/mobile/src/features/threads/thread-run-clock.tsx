@@ -20,11 +20,16 @@ function LiveRunDuration(props: { readonly startedAtMs: number }) {
  * The run's elapsed time: counting while it runs, frozen at the final duration once it has
  * ended. A frozen clock never subscribes to the tick.
  */
-export function ThreadRunDuration(props: { readonly timer: ThreadRunTimer }) {
+export function ThreadRunDuration(props: {
+  readonly timer: ThreadRunTimer;
+  /** Set when nothing precedes the time, so it does not start with the label gap. */
+  readonly bare?: boolean;
+}) {
   const { startedAtMs, endedAtMs } = props.timer;
   if (startedAtMs === null) return null;
   if (endedAtMs === null) return <LiveRunDuration startedAtMs={startedAtMs} />;
-  return ` ${formatWorkingDurationLabel(endedAtMs - startedAtMs)}`;
+  const label = formatWorkingDurationLabel(endedAtMs - startedAtMs);
+  return props.bare === true ? label : ` ${label}`;
 }
 
 interface ObservedRunEndState {

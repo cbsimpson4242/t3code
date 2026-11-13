@@ -41,6 +41,8 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { Menu } from "../../components/ui/Menu";
 import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
+import { resolveThreadIcon } from "@t3tools/client-runtime/state/thread-icon";
+import { openEditThreadSheet } from "./EditThreadSheet";
 import { ProviderIcon, ProviderInstanceIcon } from "../../components/ProviderIcon";
 import { useNowAfter } from "../../lib/clock";
 import { cn } from "../../lib/cn";
@@ -70,6 +72,7 @@ import {
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozePresets,
+  isThreadRunCompletionSeen,
   threadHasUnseenCompletion,
   resolveThreadListV2Status,
   resolveThreadListV2ProviderDrivers,
@@ -78,7 +81,12 @@ import {
 } from "./threadListV2";
 import { QueuedMessageIcon } from "./queued-message-icon";
 import { ThreadRunDuration, useObservedRunEnd } from "./thread-run-clock";
-import { hasRunningDelegatedWork, isThreadRunBusy, resolveThreadRowRun } from "./threadRunTimer";
+import {
+  hasRunningDelegatedWork,
+  isThreadRunBusy,
+  resolveFullCompletionMs,
+  resolveThreadRowRun,
+} from "./threadRunTimer";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -140,6 +148,13 @@ const DONE_STATUS_LABEL: StatusLabel = {
   icon: "checkmark.circle",
   className: "text-adaptive-emerald-700-300",
   iconTintClassName: "accent-adaptive-emerald-700-300",
+};
+// A finished run the user has already looked at: the check goes and only the time stays.
+const DONE_SEEN_STATUS_LABEL: StatusLabel = {
+  label: "Done, seen",
+  icon: "checkmark.circle",
+  className: "text-foreground-muted",
+  iconTintClassName: "accent-foreground-muted",
 };
 const CANCELLED_STATUS_LABEL: StatusLabel = {
   label: "Cancelled",
@@ -799,6 +814,20 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           ? thread.latestRun
           : { ...thread.latestRun, completedAt: new Date(fullCompletionMs).toISOString() },
     });
+  // Provider-native subagent ends are seen only by this row's clock, not the server, so they are
+  // left out; the visit watermark could not otherwise catch up.
+  const finishedRunSeen =
+    runTimer?.phase === "done" &&
+    runTimer.startedAtMs !== null &&
+    isThreadRunCompletionSeen({
+      completionMs: resolveFullCompletionMs({
+        thread,
+        descendantCompletedAt: props.descendantCompletedAt ?? null,
+        observedEndedAtMs: null,
+      }),
+      lastVisitedAt: thread.lastVisitedAt,
+      viewing: selected,
+    });
   const workingLabel =
     runTimer?.phase === "delegating" ? DELEGATING_STATUS_LABEL : STATUS_LABEL_BY_STATUS[status];
   const showsWoke = status === "ready" && props.wokeAt !== null;
@@ -809,8 +838,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     (runTimer?.phase === "cancelled"
       ? CANCELLED_STATUS_LABEL
       : runTimer?.phase === "done" || isUnread
-        ? DONE_STATUS_LABEL
+        ? finishedRunSeen
+          ? DONE_SEEN_STATUS_LABEL
+          : DONE_STATUS_LABEL
         : undefined);
+  const doneSeen = statusLabel === DONE_SEEN_STATUS_LABEL;
   const recede = shouldRecedeThreadRow({
     status: runTimer?.phase === "delegating" ? "working" : status,
     selected,
@@ -962,9 +994,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     [props.autoSettleOptOutSupported, thread.autoSettleDisabledAt],
   );
   const canTurnIntoProject = canTurnThreadIntoProject(thread);
+  // Only No project threads have an icon to choose.
+  const canEditThread = canOperateThread && props.project?.isScratch === true;
   const titleMenuItems = useMemo<MenuAction[]>(
     () => [
       { id: "rename", title: "Rename", image: "square.and.pencil" },
+      ...(canEditThread
+        ? [{ id: "edit-thread", title: "Edit thread…", image: "text.bubble" } satisfies MenuAction]
+        : []),
       ...buildThreadTitleRegenerationMenuItems({
         supported: props.titleRegenerationSupported,
         isRegenerating: isRegeneratingTitle,
@@ -980,7 +1017,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           ]
         : []),
     ],
-    [canTurnIntoProject, props.titleRegenerationSupported, thread.runtime, isRegeneratingTitle],
+    [
+      canEditThread,
+      canTurnIntoProject,
+      props.titleRegenerationSupported,
+      thread.runtime,
+      isRegeneratingTitle,
+    ],
   );
   const snoozableCardMenuActions = useMemo<MenuAction[]>(
     () => [
@@ -1058,6 +1101,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "move-down") handleMoveDown();
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "rename") handleRename();
+      if (nativeEvent.event === "edit-thread") openEditThreadSheet(thread);
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
       if (nativeEvent.event === "turn-into-project") void turnThreadIntoProject(thread);
       if (nativeEvent.event === "copy-thread") {
@@ -1188,6 +1232,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               size={projectIconSize}
               projectTitle={props.project.title}
               workspaceRoot={props.project.workspaceRoot}
+              threadIcon={resolveThreadIcon(thread, props.project)}
             />
           </View>
         ) : null}
@@ -1255,27 +1300,30 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             </Pressable>
           ) : statusLabel ? (
             <View className="flex-row items-center gap-1">
-              <SymbolView
-                name={statusLabel.icon}
-                size={13}
-                tintColorClassName={
-                  selected
-                    ? selectedThreadRowColors.iconTintClassName
-                    : statusLabel.iconTintClassName
-                }
-                type="monochrome"
-                weight="semibold"
-              />
+              {doneSeen ? null : (
+                <SymbolView
+                  name={statusLabel.icon}
+                  size={13}
+                  tintColorClassName={
+                    selected
+                      ? selectedThreadRowColors.iconTintClassName
+                      : statusLabel.iconTintClassName
+                  }
+                  type="monochrome"
+                  weight="semibold"
+                />
+              )}
               <Text
+                accessibilityLabel={doneSeen ? statusLabel.label : undefined}
                 className={cn(
                   "text-xs font-t3-bold",
                   (runTimer !== null || status === "waiting") && "tabular-nums",
                   selected ? selectedThreadRowColors.foregroundClassName : statusLabel.className,
                 )}
               >
-                {statusLabel.label}
+                {doneSeen ? null : statusLabel.label}
                 {runTimer !== null ? (
-                  <ThreadRunDuration timer={runTimer} />
+                  <ThreadRunDuration timer={runTimer} bare={doneSeen} />
                 ) : status === "waiting" ? (
                   <ThreadListV2Duration startedAt={thread.latestRun?.completedAt ?? null} />
                 ) : null}
@@ -1442,6 +1490,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           projectIcon={props.project?.projectIcon}
           faviconPath={props.project?.faviconPath}
           workspaceRoot={props.project?.workspaceRoot}
+          threadIcon={resolveThreadIcon(thread, props.project)}
         />
       </ThreadWorkingRing>
       <Text
@@ -1468,8 +1517,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           alignSelf: "stretch",
         }}
       >
-        {statusLabel?.label ?? (snoozedRow ? "Snoozed" : timeLabel)}
-        {runTimer ? <ThreadRunDuration timer={runTimer} /> : null}
+        {doneSeen ? null : (statusLabel?.label ?? (snoozedRow ? "Snoozed" : timeLabel))}
+        {runTimer ? <ThreadRunDuration timer={runTimer} bare={doneSeen} /> : null}
       </Text>
     </View>
   );
@@ -1551,6 +1600,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                 size={projectIconSize}
                 projectTitle={props.project.title}
                 workspaceRoot={props.project.workspaceRoot}
+                threadIcon={resolveThreadIcon(thread, props.project)}
               />
             </View>
           ) : null}

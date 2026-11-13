@@ -1,3 +1,4 @@
+import { toggleProjectScopeKey } from "@t3tools/client-runtime/state/project-grouping";
 import type { MenuAction } from "@react-native-menu/menu";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { ThreadListToolbar } from "./ThreadListToolbar";
@@ -11,7 +12,7 @@ function checkedMenuState(checked: boolean) {
 
 export function HomeHeader(props: HomeHeaderProps) {
   const hasCustomListOptions =
-    props.selectedEnvironmentId !== null || props.selectedProjectKey !== null;
+    props.selectedEnvironmentId !== null || props.selectedProjectKeys.length > 0;
   const menuActions: MenuAction[] = [
     {
       id: "environment",
@@ -39,12 +40,13 @@ export function HomeHeader(props: HomeHeaderProps) {
               {
                 id: "project:all",
                 title: "All projects",
-                state: checkedMenuState(props.selectedProjectKey === null),
+                state: checkedMenuState(props.selectedProjectKeys.length === 0),
               },
               ...props.projects.map((project) => ({
                 id: `project:${project.key}`,
                 title: project.label,
-                state: checkedMenuState(props.selectedProjectKey === project.key),
+                state: checkedMenuState(props.selectedProjectKeys.includes(project.key)),
+                attributes: { keepsMenuPresented: true },
               })),
             ],
           },
@@ -69,14 +71,14 @@ export function HomeHeader(props: HomeHeaderProps) {
     }
 
     if (id === "project:all") {
-      props.onProjectChange(null);
+      props.onProjectChange([]);
       return;
     }
 
     if (id.startsWith("project:")) {
       const projectKey = id.slice("project:".length);
       if (props.projects.some((project) => project.key === projectKey)) {
-        props.onProjectChange(projectKey);
+        props.onProjectChange(toggleProjectScopeKey(props.selectedProjectKeys, projectKey));
       }
       return;
     }

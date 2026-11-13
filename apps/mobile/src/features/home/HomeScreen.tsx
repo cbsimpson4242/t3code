@@ -19,7 +19,10 @@ import {
   type EnvironmentProject,
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
+import {
+  formatProjectScopeSummary,
+  pickableProjectGroups,
+} from "@t3tools/client-runtime/state/project-grouping";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
@@ -93,7 +96,7 @@ import { useThreadListV2ShelfPreferences } from "../threads/use-thread-list-v2-s
 import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
 import {
   buildHomeProjectScopes,
-  findHomeProjectScope,
+  findHomeProjectScopes,
   type HomeProjectSortOrder,
 } from "./homeThreadList";
 import { createSwipeRowActivation } from "./swipe-row-activation";
@@ -115,12 +118,12 @@ interface HomeScreenProps {
   >;
   readonly searchQuery: string;
   readonly selectedEnvironmentId: EnvironmentId | null;
-  readonly selectedProjectKey: string | null;
+  readonly selectedProjectKeys: ReadonlyArray<string>;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
-  readonly onProjectChange: (projectKey: string | null) => void;
+  readonly onProjectChange: (projectKeys: ReadonlyArray<string>) => void;
   readonly onAddConnection: () => void;
   readonly onOpenSettings: () => void;
   readonly onStartNewTask: () => void;
@@ -417,18 +420,18 @@ export function HomeScreen(props: HomeScreenProps) {
     return map;
   })();
 
-  const v2ProjectScopeKey = props.selectedProjectKey;
-  // An archived project's filter reads as all projects, matching the filter menu.
-  const v2ScopedProjectGroup = findHomeProjectScope(
+  // An archived project drops out of the filter, so it reads as the rest or all projects.
+  const v2ScopedProjectGroups = findHomeProjectScopes(
     pickableProjectGroups(projectScopes),
-    v2ProjectScopeKey,
+    props.selectedProjectKeys,
   );
+  const v2ScopedProjectRefs = v2ScopedProjectGroups.flatMap((scope) => scope.projectRefs);
   const threadSearch = useThreadSearch(
     searchEnvironmentIds,
     props.searchQuery,
-    v2ScopedProjectGroup === null
+    v2ScopedProjectGroups.length === 0
       ? {}
-      : { projectIds: v2ScopedProjectGroup.projectRefs.map((ref) => ref.projectId) },
+      : { projectIds: v2ScopedProjectRefs.map((ref) => ref.projectId) },
   );
   const threadSearchMatchByKey = useThreadListSearchMatches(props.threads, threadSearch);
   const v2ProjectTitleByProjectKey = new Map(
@@ -453,7 +456,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const [settledVisibleCount, setSettledVisibleCount] = useState(
     THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   );
-  const settledResetKey = `${props.selectedEnvironmentId ?? "all"}:${v2ProjectScopeKey ?? "all"}:${props.searchQuery.trim()}`;
+  const settledResetKey = `${props.selectedEnvironmentId ?? "all"}:${props.selectedProjectKeys.join(",") || "all"}:${props.searchQuery.trim()}`;
   const [lastSettledResetKey, setLastSettledResetKey] = useState(settledResetKey);
   if (lastSettledResetKey !== settledResetKey) {
     setLastSettledResetKey(settledResetKey);
@@ -498,7 +501,7 @@ export function HomeScreen(props: HomeScreenProps) {
     threads: props.threads,
     pendingTasks: props.pendingTasks,
     environmentId: props.selectedEnvironmentId,
-    projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
+    projectRefs: v2ScopedProjectGroups.length === 0 ? null : v2ScopedProjectRefs,
     searchQuery: props.searchQuery,
     searchMatches: threadSearchMatchByKey,
     settlementEnvironmentIds,
@@ -801,7 +804,7 @@ export function HomeScreen(props: HomeScreenProps) {
             label: scope.title,
           }))}
           selectedEnvironmentId={props.selectedEnvironmentId}
-          selectedProjectKey={props.selectedProjectKey}
+          selectedProjectKeys={props.selectedProjectKeys}
           onEnvironmentChange={props.onEnvironmentChange}
           onProjectChange={props.onProjectChange}
         />
@@ -822,9 +825,9 @@ export function HomeScreen(props: HomeScreenProps) {
         detail={`No threads matching "${props.searchQuery}".`}
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
-    ) : v2ScopedProjectGroup !== null ? (
+    ) : v2ScopedProjectGroups.length > 0 ? (
       <EmptyState
-        title={`No threads in ${v2ScopedProjectGroup.title}`}
+        title={`No threads in ${formatProjectScopeSummary(v2ScopedProjectGroups.map((scope) => scope.title))}`}
         detail="Choose another project or create a new task."
         variant={Platform.OS === "android" ? "plain" : undefined}
       />

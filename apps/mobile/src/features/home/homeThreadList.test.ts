@@ -5,7 +5,12 @@ import type {
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildHomeProjectScopes, findHomeProjectScope } from "./homeThreadList";
+import {
+  buildHomeProjectScopes,
+  findHomeProjectScope,
+  findHomeProjectScopes,
+  resolveHomeProjectKeys,
+} from "./homeThreadList";
 import { makeThreadShellFixture } from "../../test-fixtures";
 import { buildThreadListV2Items } from "../threads/threadListV2";
 
@@ -221,5 +226,44 @@ describe("home project scopes", () => {
     expect(findHomeProjectScope(scopes, "environment-local:project-target")).toBe(targetScope);
     expect(findHomeProjectScope(scopes, "environment-local:missing")).toBeNull();
     expect(findHomeProjectScope(scopes, null)).toBeNull();
+  });
+
+  it("selects the union of several project filters and drops projects that are gone", () => {
+    const environmentId = EnvironmentId.make("environment-local");
+    const projects = ["alpha", "beta", "gamma"].map((name) =>
+      makeProject({
+        environmentId,
+        id: ProjectId.make(`project-${name}`),
+        title: name,
+        workspaceRoot: `/workspaces/${name}`,
+      }),
+    );
+    const scopes = buildHomeProjectScopes({
+      projects,
+      environmentId: null,
+      projectGroupingMode: "separate",
+    });
+    const selected = findHomeProjectScopes(scopes, [
+      "environment-local:/workspaces/gamma",
+      "environment-local:project-alpha",
+      "environment-local:/workspaces/gamma",
+      "environment-local:missing",
+    ]);
+    expect(selected.map((scope) => scope.title)).toEqual(["gamma", "alpha"]);
+    expect(selected.flatMap((scope) => scope.projectRefs.map((ref) => ref.projectId))).toEqual([
+      ProjectId.make("project-gamma"),
+      ProjectId.make("project-alpha"),
+    ]);
+    expect(findHomeProjectScopes(scopes, [])).toEqual([]);
+
+    const knownKeys = scopes.map((scope) => scope.key);
+    expect(
+      resolveHomeProjectKeys({
+        keys: ["environment-local:/workspaces/beta", "gone", "environment-local:/workspaces/beta"],
+        projects,
+        projectGroupingMode: "separate",
+        knownKeys,
+      }),
+    ).toEqual(["environment-local:/workspaces/beta"]);
   });
 });

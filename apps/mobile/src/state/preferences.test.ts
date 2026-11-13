@@ -213,3 +213,17 @@ describe("thread list view persistence", () => {
     expect(MobilePreferences.sanitizePreferences({}).threadListView).toBeUndefined();
   });
 });
+
+describe("thread list filter persistence", () => {
+  it("keeps the project filter as a list, and still reads the one-project shape older builds saved", () => {
+    const read = (threadListFilters: unknown) =>
+      MobilePreferences.sanitizePreferences({
+        threadListFilters,
+      } as unknown as MobilePreferences.Preferences).threadListFilters;
+    const several = { environmentId: null, projectKey: null, projectKeys: ["a", "b"] };
+    expect(read(several)).toEqual(several);
+    const legacy = { environmentId: null, projectKey: "a" };
+    expect(read(legacy)).toEqual(legacy);
+    expect(read({ environmentId: null, projectKey: null, projectKeys: [1] })).toBeUndefined();
+  });
+});

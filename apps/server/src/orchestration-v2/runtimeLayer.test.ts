@@ -2597,6 +2597,35 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         DateTime.toEpochMillis(untaggedShell.updatedAt),
       );
 
+      const emojiIcon = { kind: "emoji", emoji: "🚀" } as const;
+      const rejectedIcon = yield* orchestrator
+        .dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("runtime-layer-lifecycle-icon-two-emoji"),
+          threadId,
+          icon: { kind: "emoji", emoji: "🚀🔥" },
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(rejectedIcon, Orchestrator.OrchestratorDispatchError);
+      assert.isUndefined(shellOf(yield* orchestrator.getShellSnapshot()).icon);
+      for (const [step, icon, expected] of [
+        ["set", emojiIcon, emojiIcon],
+        ["rename-keeps-icon", undefined, emojiIcon],
+        ["clear", null, undefined],
+      ] as const) {
+        yield* orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make(`runtime-layer-lifecycle-icon-${step}`),
+          threadId,
+          ...(icon === undefined ? { title: "Renamed lifecycle thread" } : { icon }),
+        });
+        assert.deepEqual(shellOf(yield* orchestrator.getShellSnapshot()).icon, expected, step);
+        assert.deepEqual(
+          (yield* orchestrator.getThreadProjection(threadId)).thread.icon ?? undefined,
+          expected,
+        );
+      }
+
       const preAutoProjection = yield* orchestrator.getThreadProjection(threadId);
       const staleAutoSettle = yield* orchestrator
         .dispatch({

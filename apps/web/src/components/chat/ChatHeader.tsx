@@ -30,7 +30,9 @@ import { canShareWithGuestAtom } from "./guestShareAvailability";
 import { useAtomValue } from "@effect/atom-react";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
-import { ProjectFavicon } from "../ProjectFavicon";
+import { useThreadShell } from "../../state/entities";
+import { openEditThreadDialog } from "../EditThreadDialog";
+import { ThreadLogo } from "../ThreadLogo";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -95,6 +97,8 @@ export const ChatHeader = memo(function ChatHeader({
     AuthOrchestrationOperateScope,
   );
   const canShareWithGuest = useAtomValue(canShareWithGuestAtom(activeThreadEnvironmentId));
+  const threadIcon = useThreadShell(isServerThread ? activeThreadRef : null)?.icon;
+  const canEditThreadIcon = isServerThread && canOperateThread && activeProject?.isScratch === true;
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -295,24 +299,45 @@ export const ChatHeader = memo(function ChatHeader({
         {activeProject ? (
           <>
             <WorkspaceBreadcrumbItem className="shrink">
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      aria-label={`New thread in ${activeProjectName}`}
-                      onClick={onNewThreadInProject}
-                      className="inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                    />
-                  }
-                >
-                  <ProjectFavicon project={activeProject} className="size-3.5" />
-                  <WorkspaceBreadcrumbText className="max-w-40">
-                    {activeProjectName}
-                  </WorkspaceBreadcrumbText>
-                </TooltipTrigger>
-                <TooltipPopup side="top">New thread in {activeProjectName}</TooltipPopup>
-              </Tooltip>
+              <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
+                {canEditThreadIcon ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
+                          aria-label="Edit thread icon"
+                          onClick={() => openEditThreadDialog(activeThreadRef)}
+                          className="inline-flex shrink-0 cursor-pointer items-center rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                        />
+                      }
+                    >
+                      <ThreadLogo icon={threadIcon} project={activeProject} className="size-3.5" />
+                    </TooltipTrigger>
+                    <TooltipPopup side="top">Edit thread icon</TooltipPopup>
+                  </Tooltip>
+                ) : null}
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label={`New thread in ${activeProjectName}`}
+                        onClick={onNewThreadInProject}
+                        className="inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                      />
+                    }
+                  >
+                    {canEditThreadIcon ? null : (
+                      <ThreadLogo icon={threadIcon} project={activeProject} className="size-3.5" />
+                    )}
+                    <WorkspaceBreadcrumbText className="max-w-40">
+                      {activeProjectName}
+                    </WorkspaceBreadcrumbText>
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">New thread in {activeProjectName}</TooltipPopup>
+                </Tooltip>
+              </span>
             </WorkspaceBreadcrumbItem>
             <WorkspaceBreadcrumbSeparator>
               <WorkspaceBreadcrumbText>/</WorkspaceBreadcrumbText>
