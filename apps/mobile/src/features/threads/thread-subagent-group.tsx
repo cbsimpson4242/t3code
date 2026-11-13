@@ -19,6 +19,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { ProviderIcon, ProviderInstanceIcon } from "../../components/ProviderIcon";
 import { cn } from "../../lib/cn";
+import { resolveAcpRegistryAgentId } from "../../lib/hermesProvider";
 import type { ThreadFeedActivity } from "../../lib/threadActivity";
 import { serverEnvironment } from "../../state/server";
 import { environmentThreadDetails } from "../../state/threads";
@@ -56,16 +57,12 @@ function SubagentAvatar(props: {
   const driver =
     provider?.driver ?? (props.item.remoteChild === undefined ? props.item.driver : undefined);
   const badgeEntries = providers.map((candidate) => {
-    const rawConfig = props.config?.settings.providerInstances[candidate.instanceId]?.config;
-    const instanceConfig =
-      rawConfig !== null && typeof rawConfig === "object"
-        ? (rawConfig as Readonly<Record<string, unknown>>)
-        : null;
-    const agentId = instanceConfig?.source === "local" ? undefined : instanceConfig?.agentId;
     return {
       ...candidate,
       driverKind: candidate.driver,
-      acpRegistryAgentId: typeof agentId === "string" ? agentId.trim() || undefined : undefined,
+      acpRegistryAgentId: resolveAcpRegistryAgentId(
+        props.config?.settings.providerInstances[candidate.instanceId]?.config,
+      ),
     };
   });
   const badgeEntry = badgeEntries.find(
@@ -83,6 +80,7 @@ function SubagentAvatar(props: {
       {showBadge ? (
         <ProviderInstanceIcon
           provider={provider.driver}
+          acpRegistryAgentId={badgeEntry?.acpRegistryAgentId}
           iconUrl={provider.iconUrl}
           size={15}
           displayName={resolveProviderInstanceDisplayName(provider)}
@@ -92,7 +90,13 @@ function SubagentAvatar(props: {
       ) : driver === undefined ? (
         <SymbolView name="sparkles" size={13} tintColorClassName="accent-icon-muted" />
       ) : (
-        <ProviderIcon provider={driver} iconUrl={provider?.iconUrl} size={15} />
+        <ProviderIcon
+          provider={driver}
+          acpRegistryAgentId={badgeEntry?.acpRegistryAgentId}
+          displayName={provider ? resolveProviderInstanceDisplayName(provider) : undefined}
+          iconUrl={provider?.iconUrl}
+          size={15}
+        />
       )}
     </View>
   );

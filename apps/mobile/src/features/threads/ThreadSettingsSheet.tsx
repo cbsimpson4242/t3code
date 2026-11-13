@@ -160,6 +160,7 @@ const attemptedMigrationGenerations = new Map<EnvironmentId, number>();
 function ProviderHeader(props: {
   readonly driver: string | undefined;
   readonly iconUrl: string | undefined;
+  readonly agentId: string | undefined;
   readonly label: string;
   readonly collapsible: boolean;
   readonly collapsed: boolean;
@@ -168,7 +169,13 @@ function ProviderHeader(props: {
 }) {
   const content = (
     <>
-      <ProviderIcon iconUrl={props.iconUrl} provider={props.driver} size={15} />
+      <ProviderIcon
+        acpRegistryAgentId={props.agentId}
+        displayName={props.label}
+        iconUrl={props.iconUrl}
+        provider={props.driver}
+        size={15}
+      />
       <Text className="text-sm font-t3-medium text-foreground-muted">{props.label}</Text>
       {props.collapsible ? (
         <>
@@ -660,6 +667,7 @@ type ThreadSettingsProviderCatalog = {
   readonly key: string;
   readonly driver: string | undefined;
   readonly iconUrl: string | undefined;
+  readonly agentId: string | undefined;
   readonly label: string;
   readonly collapsible: boolean;
   readonly collapsed: boolean;
@@ -734,6 +742,7 @@ function ThreadSettingsProviderListHeader(props: {
       collapsed={props.provider.collapsed}
       driver={props.provider.driver}
       iconUrl={props.provider.iconUrl}
+      agentId={props.provider.agentId}
       label={props.provider.label}
       modelCount={props.provider.modelCount}
       onToggle={onToggle}
@@ -795,6 +804,7 @@ function buildThreadSettingsCatalogItems(
       key: group.providerKey,
       driver,
       iconUrl: group.models[0]?.providerIconUrl,
+      agentId: group.models[0]?.providerAgentId,
       label: group.providerLabel,
       collapsible,
       collapsed,

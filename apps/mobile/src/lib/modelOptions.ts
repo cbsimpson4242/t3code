@@ -22,6 +22,8 @@ import {
   getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
 import { resolveModelShortName } from "@t3tools/client-runtime/provider-clients";
+import { resolveAcpRegistryAgentId } from "./hermesProvider";
+import { getDisplayModelName, splitQualifiedModelName } from "./qualifiedModelName";
 
 export type ModelOption = {
   readonly key: string;
@@ -33,6 +35,8 @@ export type ModelOption = {
   readonly providerDriver: string;
   readonly supportedRuntimeModes?: ReadonlyArray<RuntimeMode>;
   readonly providerIconUrl?: string | undefined;
+  /** ACP registry agent id (or the Hermes brand id) used to pick bundled provider artwork. */
+  readonly providerAgentId?: string | undefined;
   readonly providerBadge?: {
     readonly displayName: string;
     readonly accentColor?: string;
@@ -59,6 +63,11 @@ export type ProviderGroup = {
   readonly models: ReadonlyArray<ModelOption>;
   readonly updateRequired?: ProviderUpdateRequired;
 };
+
+/** Compact short names lead with the model id too (see `splitQualifiedModelName`). */
+function displayShortName(shortName: string | undefined): string | undefined {
+  return shortName === undefined ? undefined : getDisplayModelName(shortName);
+}
 
 function providerDisplayLabel(provider: {
   readonly displayName?: string | undefined;
@@ -294,16 +303,8 @@ export function buildModelOptions(
     if (groupKey) return provider.continuation?.groupKey === groupKey;
     return provider.driver !== "antigravity";
   };
-  const registryAgentId = (instanceId: ModelSelection["instanceId"]) => {
-    const configValue = config?.settings?.providerInstances[instanceId]?.config;
-    if (configValue === null || typeof configValue !== "object") return undefined;
-    const agentId = "agentId" in configValue ? configValue.agentId : undefined;
-    return "source" in configValue && configValue.source === "local"
-      ? undefined
-      : typeof agentId === "string"
-        ? agentId.trim() || undefined
-        : undefined;
-  };
+  const registryAgentId = (instanceId: ModelSelection["instanceId"]) =>
+    resolveAcpRegistryAgentId(config?.settings?.providerInstances[instanceId]?.config);
   const badgeEntries = (config?.providers ?? []).map((provider) => ({
     driverKind: provider.driver,
     enabled: provider.enabled,
@@ -350,6 +351,7 @@ export function buildModelOptions(
 
     const providerLabel = providerDisplayLabel(provider);
     const providerBadge = providerBadgeFor(provider.instanceId);
+    const providerAgentId = registryAgentId(provider.instanceId);
     const updateRequired = provider.updateRequiredModels?.length
       ? { driver: provider.driver, updateRequiredModels: provider.updateRequiredModels }
       : undefined;
@@ -363,12 +365,13 @@ export function buildModelOptions(
       models.sort((a, b) => (order.get(a.slug) ?? Infinity) - (order.get(b.slug) ?? Infinity));
     for (const model of models) {
       const key = `${provider.instanceId}:${model.slug}`;
-      const shortName = resolveModelShortName(model, provider.driver);
+      const shortName = displayShortName(resolveModelShortName(model, provider.driver));
+      const qualified = splitQualifiedModelName(model.name);
       options.set(key, {
         key,
-        label: model.name,
+        label: qualified?.modelId ?? model.name,
         ...(shortName ? { shortName } : {}),
-        subtitle: model.subProvider ?? "",
+        subtitle: model.subProvider ?? qualified?.label ?? "",
         providerKey: provider.instanceId,
         providerLabel,
         providerDriver: provider.driver,
@@ -377,6 +380,7 @@ export function buildModelOptions(
           ? {}
           : { supportedRuntimeModes: provider.supportedRuntimeModes }),
         ...(provider.iconUrl ? { providerIconUrl: provider.iconUrl } : {}),
+        ...(providerAgentId ? { providerAgentId } : {}),
         isHidden: !model.isCustom && hiddenModels.has(model.slug),
         canHide: !model.isCustom,
         isDefault: model.isDefault === true,
@@ -431,17 +435,25 @@ export function buildModelOptions(
         instanceId: fallbackModelSelection.instanceId,
       });
       const shortName = model
-        ? resolveModelShortName(model, isProviderDriverKind(providerDriver) ? providerDriver : null)
+        ? displayShortName(
+            resolveModelShortName(
+              model,
+              isProviderDriverKind(providerDriver) ? providerDriver : null,
+            ),
+          )
         : undefined;
+      const qualified = model ? splitQualifiedModelName(model.name) : null;
+      const providerAgentId = registryAgentId(fallbackModelSelection.instanceId);
       options.set(key, {
         key,
-        label: model?.name ?? fallbackModelSelection.model,
+        label: qualified?.modelId ?? model?.name ?? fallbackModelSelection.model,
         ...(shortName ? { shortName } : {}),
-        subtitle: model?.subProvider ?? "",
+        subtitle: model?.subProvider ?? qualified?.label ?? "",
         providerKey: fallbackModelSelection.instanceId,
         providerLabel,
         providerDriver,
         providerBadge: providerBadgeFor(fallbackModelSelection.instanceId),
+        ...(providerAgentId ? { providerAgentId } : {}),
         isDefault: false,
         isLegacy: model?.isLegacy === true,
         ...(isModelSelectionUnavailable(config, fallbackModelSelection, projectId) ||

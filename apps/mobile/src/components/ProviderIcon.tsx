@@ -12,12 +12,34 @@ import { useAppearancePreferences } from "../features/settings/appearance/Appear
 import { AppText as Text } from "./ui/AppText";
 import { cn } from "../lib/cn";
 import { getProviderClient } from "@t3tools/client-runtime/provider-clients";
+import { isHermesAcpProvider } from "../lib/hermesProvider";
 
 type ProviderIconProps = {
   readonly provider: string | null | undefined;
   readonly iconUrl?: string | null | undefined;
+  /** ACP registry agent id (or the Hermes brand id) of the provider instance, when known. */
+  readonly acpRegistryAgentId?: string | undefined;
+  /** Last-resort Hermes detection when the instance config is unavailable. */
+  readonly displayName?: string | undefined;
   readonly size?: number;
 };
+
+/** Bundled Hermes Agent artwork (MIT, Nous Research); the dark variant follows the app theme. */
+function HermesProviderIcon(props: { readonly isDarkMode: boolean; readonly size: number }) {
+  return (
+    <Image
+      accessibilityIgnoresInvertColors
+      accessibilityLabel="Hermes provider logo"
+      source={
+        props.isDarkMode
+          ? require("../../assets/hermes/hermes-logo-dark.png")
+          : require("../../assets/hermes/hermes-logo-light.png")
+      }
+      style={{ width: props.size, height: props.size }}
+      contentFit="contain"
+    />
+  );
+}
 
 function AcpRegistryFallbackIcon(props: { readonly color: string; readonly size: number }) {
   return (
@@ -85,6 +107,17 @@ export function ProviderIcon(props: ProviderIconProps) {
     );
   }
   if (props.provider === "acpRegistry") {
+    // Hermes is not in the ACP registry, so its artwork ships with the app. A registry icon always
+    // wins over the display-name fallback.
+    if (
+      isHermesAcpProvider({
+        agentId: props.acpRegistryAgentId,
+        displayName:
+          resolveOfficialAcpRegistryIconUrl(props.iconUrl) === null ? props.displayName : undefined,
+      })
+    ) {
+      return <HermesProviderIcon isDarkMode={isDarkMode} size={size} />;
+    }
     return <AcpRegistryProviderIcon color={mono} iconUrl={props.iconUrl} size={size} />;
   }
 
@@ -155,6 +188,7 @@ export function ProviderIcon(props: ProviderIconProps) {
 export function ProviderInstanceIcon(props: {
   readonly iconUrl?: string | null;
   readonly provider: string | null | undefined;
+  readonly acpRegistryAgentId?: string | undefined;
   readonly size?: number;
   readonly displayName: string;
   readonly accentColor?: string;
@@ -165,7 +199,13 @@ export function ProviderInstanceIcon(props: {
   return (
     <View style={{ position: "relative" }}>
       <View style={{ opacity: 0.6 }}>
-        <ProviderIcon iconUrl={props.iconUrl} provider={props.provider} size={props.size} />
+        <ProviderIcon
+          acpRegistryAgentId={props.acpRegistryAgentId}
+          displayName={props.displayName}
+          iconUrl={props.iconUrl}
+          provider={props.provider}
+          size={props.size}
+        />
       </View>
       {props.showBadge ? (
         // An absolute badge alone is capped at icon width and clips initials.

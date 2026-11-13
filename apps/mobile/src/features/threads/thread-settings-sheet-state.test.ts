@@ -11,7 +11,11 @@ import {
   rememberModelOptions,
   withRememberedModelOptions,
 } from "../../state/use-model-option-memory";
-import { canCommitPendingModel, pendingModelAfterPress } from "./thread-settings-sheet-state";
+import {
+  canCommitPendingModel,
+  modelMatchesCatalogQuery,
+  pendingModelAfterPress,
+} from "./thread-settings-sheet-state";
 
 function modelOption(
   model: string,
@@ -69,6 +73,21 @@ afterEach(() => {
 });
 
 describe("thread settings sheet state", () => {
+  it("matches qualified ACP models on both the model id and the upstream label", () => {
+    const hermes: ModelOption = {
+      ...modelOption("openrouter:anthropic/claude-fable-5.2"),
+      label: "anthropic/claude-fable-5.2",
+      subtitle: "OpenRouter",
+      providerLabel: "Hermes",
+    };
+    const matches = (query: string) =>
+      modelMatchesCatalogQuery({ model: hermes, providerLabel: "Hermes", query });
+    expect(matches("fable-5.2")).toBe(true);
+    expect(matches("openrouter")).toBe(true);
+    expect(matches("openrouter:anthropic")).toBe(true);
+    expect(matches("gpt-6")).toBe(false);
+  });
+
   it("preserves in-progress edits when the staged model is pressed again", () => {
     rememberModelOptions("codex", "gpt-next", [{ id: "effort", value: "medium" }]);
     const pending = modelOption("gpt-next", [{ id: "effort", value: "high" }]);

@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { ProviderIcon } from "../../components/ProviderIcon";
+import { resolveAcpRegistryAgentId } from "../../lib/hermesProvider";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentPresentations } from "../../state/presentation";
@@ -336,6 +337,10 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                             <ProviderIcon
                               provider={provider.driver}
                               iconUrl={provider.iconUrl}
+                              acpRegistryAgentId={resolveAcpRegistryAgentId(
+                                config.settings.providerInstances[provider.instanceId]?.config,
+                              )}
+                              displayName={provider.displayName}
                               size={18}
                             />
                             <Text className="min-w-0 flex-1 text-base font-t3-medium text-foreground">

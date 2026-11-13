@@ -26,6 +26,8 @@ import { Pressable, View, type ColorValue } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { ProviderIcon, ProviderInstanceIcon } from "../../components/ProviderIcon";
+import { resolveAcpRegistryAgentId } from "../../lib/hermesProvider";
+import { getDisplayModelName } from "../../lib/qualifiedModelName";
 import { environmentThreadDetails } from "../../state/threads";
 import { serverEnvironment } from "../../state/server";
 import { ThreadContextDivider } from "./thread-context-divider";
@@ -63,10 +65,11 @@ export function ThreadModelSwitchDivider(props: {
   const describe = (selection: ModelSelection, effort: string | undefined) => {
     const provider = providers.find((candidate) => candidate.instanceId === selection.instanceId);
     const model = provider?.models.find((candidate) => candidate.slug === selection.model);
-    const modelName =
+    const modelName = getDisplayModelName(
       (model ? resolveModelShortName(model, provider?.driver) : undefined) ??
-      model?.name ??
-      selection.model;
+        model?.name ??
+        selection.model,
+    );
     return [change.modelChanged ? modelName : null, effort].filter(Boolean).join(" ");
   };
   const { from, to } = props.modelSwitch;
@@ -116,17 +119,13 @@ export function ThreadHandoffDivider(props: {
   const { endpoints } = props;
   const endpointProps = {
     providers: (config?.providers ?? []).map((provider) => {
-      const rawConfig = config?.settings.providerInstances[provider.instanceId]?.config;
-      const instanceConfig =
-        rawConfig !== null && typeof rawConfig === "object"
-          ? (rawConfig as Readonly<Record<string, unknown>>)
-          : null;
-      const agentId = instanceConfig?.source === "local" ? undefined : instanceConfig?.agentId;
       return {
         ...provider,
         driverKind: provider.driver,
         accentColor: normalizeProviderAccentColor(provider.accentColor),
-        acpRegistryAgentId: typeof agentId === "string" ? agentId.trim() || undefined : undefined,
+        acpRegistryAgentId: resolveAcpRegistryAgentId(
+          config?.settings.providerInstances[provider.instanceId]?.config,
+        ),
       };
     }),
     surfaceColor: props.surfaceColor,
@@ -169,11 +168,12 @@ function HandoffEndpoint(props: {
 }) {
   const provider = props.providers.find((candidate) => candidate.instanceId === props.instanceId);
   const model = provider?.models.find((candidate) => candidate.slug === props.model);
-  const label =
+  const label = getDisplayModelName(
     (model ? resolveModelShortName(model, provider?.driver) : undefined) ??
-    model?.name ??
-    props.model ??
-    (provider ? resolveProviderInstanceDisplayName(provider) : props.instanceId);
+      model?.name ??
+      props.model ??
+      (provider ? resolveProviderInstanceDisplayName(provider) : props.instanceId),
+  );
   const showBadge = provider !== undefined && shouldShowInstanceBadge(provider, props.providers);
   return (
     <Pressable
@@ -192,6 +192,7 @@ function HandoffEndpoint(props: {
       {showBadge && provider !== undefined ? (
         <ProviderInstanceIcon
           provider={provider.driver}
+          acpRegistryAgentId={provider.acpRegistryAgentId}
           iconUrl={provider.iconUrl}
           size={14}
           displayName={resolveProviderInstanceDisplayName(provider)}
@@ -202,6 +203,8 @@ function HandoffEndpoint(props: {
       ) : (
         <ProviderIcon
           provider={provider?.driver ?? props.instanceId}
+          acpRegistryAgentId={provider?.acpRegistryAgentId}
+          displayName={provider ? resolveProviderInstanceDisplayName(provider) : undefined}
           iconUrl={provider?.iconUrl}
           size={12}
         />

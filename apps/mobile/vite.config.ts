@@ -5,6 +5,8 @@ import "vite-plus/test/config";
 
 const reactTests = [
   "src/features/threads/ThreadWorkingRing.test.tsx",
+  "src/features/threads/VoiceMessagePlayer.test.tsx",
+  "src/features/threads/AgentMediaAttachments.test.tsx",
   "src/features/threads/git/GitBranchesSheet.test.tsx",
   "src/features/threads/new-task-flow-provider.test.tsx",
   "src/features/workspace/workspace-tabs-state.test.ts",

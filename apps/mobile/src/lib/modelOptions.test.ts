@@ -855,4 +855,98 @@ describe("synchronized mobile model visibility", () => {
       });
     });
   });
+
+  describe("Hermes ACP provider", () => {
+    const hermesConfig = (providerConfig: Record<string, unknown>) =>
+      ({
+        settings: {
+          ...DEFAULT_SERVER_SETTINGS,
+          providerInstances: {
+            hermes: { driver: "acpRegistry", enabled: true, config: providerConfig },
+          },
+        },
+        providers: [
+          {
+            instanceId: "hermes",
+            driver: "acpRegistry",
+            displayName: "Hermes",
+            enabled: true,
+            installed: true,
+            auth: { status: "authenticated" },
+            models: [
+              {
+                slug: "openrouter:anthropic/claude-fable-5.2",
+                name: "OpenRouter · anthropic/claude-fable-5.2",
+                isCustom: false,
+                capabilities: null,
+              },
+              {
+                slug: "openai-codex:gpt-6.1-sol",
+                name: "ChatGPT or Codex Subscription · gpt-6.1-sol",
+                subProvider: "ChatGPT or Codex Subscription",
+                isCustom: false,
+                capabilities: null,
+              },
+              { slug: "plain", name: "Plain model", isCustom: false, capabilities: null },
+            ],
+          },
+        ],
+      }) as unknown as ServerConfig;
+
+    it("brands a local hermes command and a registry hermes-agent instance", () => {
+      const local = hermesConfig({ source: "local", commandPath: "/home/chris/.local/bin/hermes" });
+      expect(buildModelOptions(local, null, undefined, null)[0]?.providerAgentId).toBe(
+        "hermes-agent",
+      );
+      const registry = hermesConfig({ source: "registry", agentId: "hermes-agent" });
+      expect(buildModelOptions(registry, null, undefined, null)[0]?.providerAgentId).toBe(
+        "hermes-agent",
+      );
+      const other = hermesConfig({ source: "local", commandPath: "/usr/bin/other" });
+      expect(buildModelOptions(other, null, undefined, null)[0]?.providerAgentId).toBeUndefined();
+    });
+
+    it("leads rows with the model id and keeps the upstream label as the subtitle", () => {
+      const options = buildModelOptions(
+        hermesConfig({ source: "registry", agentId: "hermes-agent" }),
+        null,
+        undefined,
+        null,
+      );
+      expect(options.map((option) => [option.label, option.subtitle])).toEqual([
+        ["anthropic/claude-fable-5.2", "OpenRouter"],
+        ["gpt-6.1-sol", "ChatGPT or Codex Subscription"],
+        ["Plain model", ""],
+      ]);
+      // Slugs and persisted selections are untouched.
+      expect(options.map((option) => option.key)).toEqual([
+        "hermes:openrouter:anthropic/claude-fable-5.2",
+        "hermes:openai-codex:gpt-6.1-sol",
+        "hermes:plain",
+      ]);
+      expect(options.map((option) => option.selection.model)).toEqual([
+        "openrouter:anthropic/claude-fable-5.2",
+        "openai-codex:gpt-6.1-sol",
+        "plain",
+      ]);
+    });
+
+    it("keeps a fallback selection for a qualified model id-first too", () => {
+      const config = hermesConfig({ source: "registry", agentId: "hermes-agent" });
+      const options = buildModelOptions(
+        { ...config, providers: [{ ...config.providers[0]!, enabled: false }] } as ServerConfig,
+        {
+          instanceId: ProviderInstanceId.make("hermes"),
+          model: "openrouter:anthropic/claude-fable-5.2",
+        },
+        undefined,
+        null,
+      );
+      expect(options[0]).toMatchObject({
+        label: "anthropic/claude-fable-5.2",
+        subtitle: "OpenRouter",
+        providerAgentId: "hermes-agent",
+      });
+    });
+  });
 });

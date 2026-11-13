@@ -13,6 +13,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { ProviderIcon, ProviderInstanceIcon } from "../../components/ProviderIcon";
 import { cn } from "../../lib/cn";
+import { resolveAcpRegistryAgentId } from "../../lib/hermesProvider";
 import { useEnvironmentServerConfig, useProject, useThreadShell } from "../../state/entities";
 import { subagentCardDetail } from "./subagent-card-presentation";
 import { SUBAGENT_TONE_TEXT_CLASS, SubagentStatusDot } from "./SubagentStatusDot";
@@ -107,17 +108,13 @@ function SubagentMetadata(props: {
   // A task in a linked environment runs a provider instance of that environment.
   const config = useEnvironmentServerConfig(subagent.remoteChild?.environmentId ?? environmentId);
   const providers = (config?.providers ?? []).map((candidate) => {
-    const rawConfig = config?.settings.providerInstances[candidate.instanceId]?.config;
-    const instanceConfig =
-      rawConfig !== null && typeof rawConfig === "object"
-        ? (rawConfig as Readonly<Record<string, unknown>>)
-        : null;
-    const agentId = instanceConfig?.source === "local" ? undefined : instanceConfig?.agentId;
     return {
       ...candidate,
       driverKind: candidate.driver,
       accentColor: normalizeProviderAccentColor(candidate.accentColor),
-      acpRegistryAgentId: typeof agentId === "string" ? agentId.trim() || undefined : undefined,
+      acpRegistryAgentId: resolveAcpRegistryAgentId(
+        config?.settings.providerInstances[candidate.instanceId]?.config,
+      ),
     };
   });
   const provider = providers.find(
@@ -145,6 +142,7 @@ function SubagentMetadata(props: {
       {showBadge ? (
         <ProviderInstanceIcon
           provider={provider.driver}
+          acpRegistryAgentId={provider.acpRegistryAgentId}
           iconUrl={provider.iconUrl}
           size={12}
           displayName={resolveProviderInstanceDisplayName(provider)}
@@ -154,6 +152,8 @@ function SubagentMetadata(props: {
       ) : (
         <ProviderIcon
           provider={provider?.driver ?? subagent.driver}
+          acpRegistryAgentId={provider?.acpRegistryAgentId}
+          displayName={provider ? resolveProviderInstanceDisplayName(provider) : undefined}
           iconUrl={provider?.iconUrl}
           size={12}
         />
