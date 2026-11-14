@@ -662,7 +662,8 @@ function useSidebarThreads(input: {
       })),
     pinView,
     selectPinTab: setPinTab,
-    // Mobile counts the same: the open rows plus each shelf's full count.
+    // Mobile counts the same: the open rows plus each shelf's full count. Drafts are added
+    // where the tabs render, as mobile counts its pending threads.
     threadsTabCount:
       activeThreads.length + workingThreads.length + snoozedThreads.length + settledCount,
     settledShelfExpanded,
@@ -3452,7 +3453,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     idPrefix={pinTabsId}
                     tab={pinView}
                     pinnedCount={pinnedThreads.length}
-                    threadsCount={threadsTabCount}
+                    threadsCount={threadsTabCount + visibleDraftSessionCount}
                     dragging={pinTabDragging}
                     dropTargeted={pinTabDragging && dragTargetSection === "pinned"}
                     onSelect={selectPinTab}
