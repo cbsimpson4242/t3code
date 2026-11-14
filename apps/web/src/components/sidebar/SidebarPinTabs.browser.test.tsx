@@ -7,8 +7,8 @@ import { render } from "../../../test/render";
 import type { SidebarPinTab } from "../Sidebar.logic";
 import { SidebarPinTabs } from "./SidebarPinTabs";
 
-function Harness(props: { dragging?: boolean; dropTargeted?: boolean }) {
-  const [tab, setTab] = useState<SidebarPinTab>("threads");
+function Harness(props: { tab?: SidebarPinTab; dragging?: boolean; dropTargeted?: boolean }) {
+  const [tab, setTab] = useState<SidebarPinTab>(props.tab ?? "threads");
   return (
     <DndContext>
       <SidebarPinTabs
@@ -57,6 +57,25 @@ it("marks the Pinned tab as the drop target only while a thread is over it", asy
     .toHaveAttribute("data-drop-target");
   await expect
     .element(screen.getByRole("tab", { name: "Threads, 12 threads" }))
+    .not.toHaveAttribute("data-drop-target");
+});
+
+it("offers only the other tab as a drop zone, so a pin can be dropped on Threads", async () => {
+  await using screen = await render(<Harness tab="pinned" dragging />);
+  const pinned = screen.getByRole("tab", { name: "Pinned, 1 thread" });
+  const threads = screen.getByRole("tab", { name: "Threads, 12 threads" });
+  await expect.element(threads).toHaveAttribute("data-drop-zone");
+  await expect.element(threads).not.toHaveAttribute("data-drop-target");
+  await expect.element(pinned).not.toHaveAttribute("data-drop-zone");
+});
+
+it("marks the Threads tab as the drop target while a pin is over it", async () => {
+  await using screen = await render(<Harness tab="pinned" dragging dropTargeted />);
+  await expect
+    .element(screen.getByRole("tab", { name: "Threads, 12 threads" }))
+    .toHaveAttribute("data-drop-target");
+  await expect
+    .element(screen.getByRole("tab", { name: "Pinned, 1 thread" }))
     .not.toHaveAttribute("data-drop-target");
 });
 

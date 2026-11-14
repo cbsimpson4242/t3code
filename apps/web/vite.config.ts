@@ -142,6 +142,18 @@ const browserTestProject = {
         resetPointer: async ({ page }) => {
           await page.mouse.move(-1, -1);
         },
+        // Real mouse input for drag tests: Chromium turns it into trusted pointer events, so
+        // dnd-kit's sensors and collision detection run as they do for a user. Coordinates are
+        // the test frame's client coordinates.
+        mouse: async ({ page, frame }, action: "move" | "down" | "up", x = 0, y = 0) => {
+          if (action === "down") return page.mouse.down();
+          if (action === "up") return page.mouse.up();
+          const testFrame = await frame();
+          const box = await (await testFrame.frameElement()).boundingBox();
+          const width = await testFrame.evaluate(() => window.innerWidth);
+          const scale = box && width > 0 ? box.width / width : 1;
+          await page.mouse.move((box?.x ?? 0) + x * scale, (box?.y ?? 0) + y * scale);
+        },
       },
     },
   },
@@ -324,10 +336,9 @@ export default defineConfig(() => {
     resolve: {
       tsconfigPaths: true,
       alias: {
-        "@betteroffice/fonts-cjk": decodeURIComponent(new URL(
-          "./src/components/files/office/fonts-cjk.ts",
-          import.meta.url,
-        ).pathname),
+        "@betteroffice/fonts-cjk": decodeURIComponent(
+          new URL("./src/components/files/office/fonts-cjk.ts", import.meta.url).pathname,
+        ),
       },
       dedupe: ["react", "react-dom"],
     },

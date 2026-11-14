@@ -126,7 +126,7 @@ describe("sidebar collision detection", () => {
 
     it("is selected only while the pointer is over it", () => {
       const detector = createSidebarCollisionDetection(() => true, {
-        pinTabId: SIDEBAR_PIN_TAB_DROP_ID,
+        tabDropId: SIDEBAR_PIN_TAB_DROP_ID,
       });
       expect(ids(detector, { x: 50, y: 10 })).toEqual([SIDEBAR_PIN_TAB_DROP_ID]);
       expect(ids(detector, { x: 200, y: 10 })).not.toContain(SIDEBAR_PIN_TAB_DROP_ID);
@@ -135,9 +135,21 @@ describe("sidebar collision detection", () => {
 
     it("is not selected when the drop would do nothing", () => {
       const detector = createSidebarCollisionDetection((id) => id !== SIDEBAR_PIN_TAB_DROP_ID, {
-        pinTabId: SIDEBAR_PIN_TAB_DROP_ID,
+        tabDropId: SIDEBAR_PIN_TAB_DROP_ID,
       });
       expect(ids(detector, { x: 50, y: 10 })).not.toContain(SIDEBAR_PIN_TAB_DROP_ID);
+    });
+
+    it("is the only target in the Simple grid, which has no slots to sort into", () => {
+      const detector = createSidebarCollisionDetection(() => true, {
+        tabDropId: SIDEBAR_PIN_TAB_DROP_ID,
+        tabDropOnly: true,
+      });
+      expect(ids(detector, { x: 50, y: 10 })).toEqual([SIDEBAR_PIN_TAB_DROP_ID]);
+      // Over the rows the drag stays where it started.
+      for (const y of [60, 200, 400]) {
+        expect(ids(detector, { x: 50, y }).every((id) => id === "source")).toBe(true);
+      }
     });
   });
 

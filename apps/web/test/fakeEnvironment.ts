@@ -330,6 +330,15 @@ let threads: ReadonlyArray<FakeThread> = [];
 let sequence = 1;
 let vcsStatusSubscriber: Queue.Queue<VcsStatusStreamEvent> | null = null;
 let shellSubscriber: Queue.Queue<OrchestrationV2ShellStreamItem> | null = null;
+let commandLog: Array<{ readonly type: string; readonly threadId?: string }> = [];
+
+/** The commands the app has dispatched since the environment was installed, oldest first. */
+export function dispatchedCommands(): ReadonlyArray<{
+  readonly type: string;
+  readonly threadId?: string;
+}> {
+  return commandLog;
+}
 
 const subscribe = <A>(first: ReadonlyArray<A>, register?: (queue: Queue.Queue<A>) => () => void) =>
   Stream.unwrap(
@@ -345,6 +354,47 @@ const subscribe = <A>(first: ReadonlyArray<A>, register?: (queue: Queue.Queue<A>
   );
 
 const handlers: Record<string, (input: never) => unknown> = {
+  // Recorded. Pins, unpins and pin reorders are applied and confirmed as the server would; any
+  // other command is left unanswered like other calls.
+  [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: {
+    readonly type: string;
+    readonly threadId?: string;
+    readonly orderKey?: string;
+  }) => {
+    commandLog.push(command);
+    const thread = threads.find((candidate) => candidate.id === command.threadId);
+    if (thread === undefined) return Effect.never;
+    const { pinOrderKey: _pinOrderKey, ...unpinned } = thread;
+    let updated: FakeThread;
+    switch (command.type) {
+      case "thread.unpin":
+        updated = unpinned;
+        break;
+      case "thread.pin":
+        updated = { ...thread, pinOrderKey: thread.pinOrderKey ?? command.orderKey ?? "z" };
+        break;
+      case "thread.pin.reorder":
+        if (thread.pinOrderKey === undefined || command.orderKey === undefined) return Effect.never;
+        updated = { ...thread, pinOrderKey: command.orderKey };
+        break;
+      default:
+        return Effect.never;
+    }
+    threads = threads.map((candidate) => (candidate === thread ? updated : candidate));
+    sequence += 1;
+    const confirmed = sequence;
+    return Effect.gen(function* () {
+      if (shellSubscriber !== null) {
+        yield* Queue.offer(shellSubscriber, {
+          kind: "thread.updated",
+          sequence: confirmed,
+          location: "active",
+          thread: shellOf(updated),
+        });
+      }
+      return { sequence: confirmed };
+    });
+  },
   [WS_METHODS.subscribeTerminalMetadata]: () =>
     subscribe<TerminalMetadataStreamEvent>([{ type: "snapshot", terminals: [] }], (queue) => {
       terminalMetadataSubscriber = queue;
@@ -453,6 +503,7 @@ const encodedDescriptor = Schema.encodeSync(ExecutionEnvironmentDescriptor)(
 /** Serves the environment's HTTP API and these threads until disposed. */
 export function installFakeEnvironment(fixtures: ReadonlyArray<FakeThread>): Disposable {
   threads = fixtures;
+  commandLog = [];
   globalThis.fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
     if (url.origin !== window.location.origin) return realFetch(input, init);

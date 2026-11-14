@@ -222,6 +222,7 @@ import {
   type SidebarPinTab,
   type SidebarSection,
   SIDEBAR_PIN_TAB_DROP_ID,
+  SIDEBAR_THREADS_TAB_DROP_ID,
   resolveSidebarRowThreadId,
   resolveThreadDescendantCompletedAt,
   resolveThreadKeysWithRunningDescendants,
@@ -1793,10 +1794,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           : args.scrollableAncestorRects,
     });
   };
+  // Either tab can be dragged up to the tab strip. A Simple tile follows the pointer sideways
+  // too, since the tab it is dropped on can be over the other column.
   const dndModifiers =
-    pinView === "threads"
-      ? [restrictToVerticalAxis, restrictToScrollViewportBelowTab]
-      : [restrictToVerticalAxis, restrictBelowPins, restrictToFirstScrollableAncestor];
+    pinView === "plain"
+      ? [restrictToVerticalAxis, restrictBelowPins, restrictToFirstScrollableAncestor]
+      : isSimpleThreadView
+        ? [restrictToScrollViewportBelowTab]
+        : [restrictToVerticalAxis, restrictToScrollViewportBelowTab];
   const attachListMotionRef = (node: HTMLUListElement) => {
     const motion = createSidebarListMotion(node);
     listMotionRef.current = motion;
@@ -2148,7 +2153,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         });
   const sidebarSortingStrategy = createSidebarSortingStrategy({
     items: sidebarListItems,
-    enabled: !isContextDrag,
+    // Sorting assumes one column; the Simple grid holds still while a tile goes to a tab.
+    enabled: !isContextDrag && !isSimpleThreadView,
     boundaryLabelHeight: SIDEBAR_DRAG_LABEL_HEIGHT,
     settledOrder: draggedSettledOrder,
     ...(draggedActiveOrder === undefined ? {} : { activeOrder: draggedActiveOrder }),
@@ -2157,9 +2163,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     routeThreadKey: routeRowThreadKey,
     snoozedThreadCount: snoozedThreads.length,
   });
-  // The Threads tab lists no pinned rows to drop between, so a pin is dropped on the tab.
-  const pinTabDropEnabled = pinView === "threads";
-  const pinTabDragging = pinTabDropEnabled && dragState !== null && !isContextDrag;
+  // Each tab lists one side only, so a thread changes sides on the other tab: dropped on Pinned
+  // from the Threads tab it pins, dropped on Threads from the Pinned tab it unpins.
+  const tabDropId =
+    pinView === "threads"
+      ? SIDEBAR_PIN_TAB_DROP_ID
+      : pinView === "pinned"
+        ? SIDEBAR_THREADS_TAB_DROP_ID
+        : undefined;
+  const pinTabDragging = tabDropId !== undefined && dragState !== null && !isContextDrag;
+  const pinTabDropTargeted =
+    pinTabDragging && dragTargetSection === (pinView === "pinned" ? "active" : "pinned");
   const draggedThreadKey = dragState?.activeKey;
   const draggedFromSection = dragState?.activeSection;
   const dragActivationY = dragState?.activationY;
@@ -2195,7 +2209,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       {
         items: sidebarListItems,
         activationY: dragActivationY ?? null,
-        ...(pinTabDropEnabled ? { pinTabId: SIDEBAR_PIN_TAB_DROP_ID } : {}),
+        ...(tabDropId === undefined ? {} : { tabDropId }),
+        // The Simple grid has no slots to sort into, only the other tab.
+        tabDropOnly: isSimpleThreadView,
       },
     );
   })();
@@ -3455,7 +3471,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     pinnedCount={pinnedThreads.length}
                     threadsCount={threadsTabCount + visibleDraftSessionCount}
                     dragging={pinTabDragging}
-                    dropTargeted={pinTabDragging && dragTargetSection === "pinned"}
+                    dropTargeted={pinTabDropTargeted}
                     onSelect={selectPinTab}
                   />
                 )}
@@ -3487,8 +3503,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           sortableId={threadKey}
                           contextDrag={isContextDrag}
                           sortableDisabled={
-                            // Drag reordering assumes one column.
-                            isSimpleThreadView ||
+                            // Drag reordering assumes one column; Simple tiles drag only to a tab.
+                            (isSimpleThreadView && pinView === "plain") ||
                             projectFolders !== null ||
                             renamingThreadKey === threadKey ||
                             !draggableThreadKeys.has(threadKey) ||

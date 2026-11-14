@@ -193,8 +193,10 @@ export function sidebarPinTabForSection(
   return section === "pinned" ? "pinned" : "threads";
 }
 
-/** The Pinned tab is a drop target outside the sortable list. */
+/** The Pinned tab is a drop target outside the sortable list, for pinning from the Threads tab. */
 export const SIDEBAR_PIN_TAB_DROP_ID = "sidebar-pin-tab";
+/** The Threads tab is a drop target outside the sortable list, for unpinning from the Pinned tab. */
+export const SIDEBAR_THREADS_TAB_DROP_ID = "sidebar-threads-tab";
 
 export function resolveSidebarThreadSection(input: {
   readonly snoozed: boolean;
@@ -277,6 +279,8 @@ type SidebarDropTarget = {
   readonly section: "pinned" | "active" | "settled";
   readonly pinnedOrder: readonly string[];
   readonly activeOrder: readonly string[];
+  /** Dropped on a tab, which lists no rows to drop between, rather than in the list. */
+  readonly onTab?: boolean;
 };
 
 export function resolveSidebarDropTarget(
@@ -286,9 +290,12 @@ export function resolveSidebarDropTarget(
 ): SidebarDropTarget | null {
   const activeIndex = items.findIndex((item) => sidebarListItemId(item) === activeKey);
   if (activeIndex === -1 || items[activeIndex]?.kind !== "thread") return null;
-  // The tab lists no rows to drop between; the plan pins to the top of every pin.
+  // The tabs list no rows to drop between: the plan pins to the top of every pin, or unpins
+  // to wherever the thread sorts among the others.
   if (overId === SIDEBAR_PIN_TAB_DROP_ID)
-    return { section: "pinned", pinnedOrder: [], activeOrder: [] };
+    return { section: "pinned", pinnedOrder: [], activeOrder: [], onTab: true };
+  if (overId === SIDEBAR_THREADS_TAB_DROP_ID)
+    return { section: "active", pinnedOrder: [], activeOrder: [], onTab: true };
   const overIndex = items.findIndex((item) => sidebarListItemId(item) === overId);
   if (overIndex === -1) return null;
   const moved = items.filter((_, index) => index !== activeIndex);
@@ -420,7 +427,7 @@ export function planSidebarThreadDrop(input: {
   readonly pinnedRowsHidden?: boolean;
   /**
    * The Pinned tab lists only pins and shows no Active label, so a drop past the last pin must
-   * not unpin the thread through a slot the user cannot see.
+   * not unpin the thread through a slot the user cannot see; a drop on the Threads tab unpins.
    */
   readonly pinnedRowsOnly?: boolean;
 }): SidebarThreadDropPlan {
@@ -438,7 +445,7 @@ export function planSidebarThreadDrop(input: {
     activeReorderableKeys,
   } = input;
   if (activeSection === "working") return { kind: "none" };
-  if (input.pinnedRowsOnly && target.section !== "pinned") return { kind: "none" };
+  if (input.pinnedRowsOnly && target.section !== "pinned" && !target.onTab) return { kind: "none" };
   if (input.supportsSettlement === false && (target.section === "settled" || activeSettled)) {
     return { kind: "none" };
   }
@@ -479,7 +486,8 @@ export function planSidebarThreadDrop(input: {
   };
   switch (target.section) {
     case "active": {
-      if (input.activeTimeOrdered) {
+      // A drop on the Threads tab picks no slot, so the thread sorts where it would unpinned.
+      if (input.activeTimeOrdered || target.onTab) {
         return activeSection === "active"
           ? { kind: "none" }
           : {
