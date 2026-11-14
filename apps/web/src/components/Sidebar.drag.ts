@@ -33,40 +33,42 @@ export function createSidebarCollisionDetection(
   options: {
     items?: readonly SidebarListItem[];
     activationY?: number | null;
-    /** The Pinned tab's droppable id while it accepts drops; only the pointer over it selects it. */
-    pinTabId?: string;
+    /** The droppable id of the tab that accepts drops; only the pointer over it selects it. */
+    tabDropId?: string;
+    /** Only the tab takes drops, as in the Simple grid, which has no slots to sort into. */
+    tabDropOnly?: boolean;
   } = {},
 ): CollisionDetection {
   const validity = new Map<string, boolean>();
   const sections = new Map<string, SidebarSection | null>();
   let previousPointerY = options.activationY;
   let boundarySection: "pinned" | "active" | undefined;
-  const { pinTabId } = options;
+  const { tabDropId, tabDropOnly = false } = options;
   return (args) => {
     const pointer = args.pointerCoordinates;
-    const pinTabRect = pinTabId === undefined ? undefined : args.droppableRects.get(pinTabId);
+    const tabRect = tabDropId === undefined ? undefined : args.droppableRects.get(tabDropId);
     if (
-      pinTabId !== undefined &&
-      pinTabRect &&
+      tabDropId !== undefined &&
+      tabRect &&
       pointer &&
-      pointer.x >= pinTabRect.left &&
-      pointer.x <= pinTabRect.right &&
-      pointer.y >= pinTabRect.top &&
-      pointer.y <= pinTabRect.bottom
+      pointer.x >= tabRect.left &&
+      pointer.x <= tabRect.right &&
+      pointer.y >= tabRect.top &&
+      pointer.y <= tabRect.bottom
     ) {
-      const container = args.droppableContainers.find((candidate) => candidate.id === pinTabId);
-      const valid = validity.get(pinTabId) ?? isValidTarget(pinTabId);
-      validity.set(pinTabId, valid);
+      const container = args.droppableContainers.find((candidate) => candidate.id === tabDropId);
+      const valid = validity.get(tabDropId) ?? isValidTarget(tabDropId);
+      validity.set(tabDropId, valid);
       if (container && valid)
-        return [{ id: pinTabId, data: { droppableContainer: container, value: 0 } }];
+        return [{ id: tabDropId, data: { droppableContainer: container, value: 0 } }];
     }
     let collisions = closestCenter(
-      pinTabId === undefined
+      tabDropId === undefined
         ? args
         : {
             ...args,
             droppableContainers: args.droppableContainers.filter(
-              (container) => container.id !== pinTabId,
+              (container) => container.id !== tabDropId,
             ),
           },
     );
@@ -111,7 +113,7 @@ export function createSidebarCollisionDetection(
       return collisions;
     }
     const id = String(nearest.id);
-    const valid = validity.get(id) ?? isValidTarget(id);
+    const valid = !tabDropOnly && (validity.get(id) ?? isValidTarget(id));
     validity.set(id, valid);
     return valid ? collisions : collisions.filter((collision) => collision.id === args.active.id);
   };

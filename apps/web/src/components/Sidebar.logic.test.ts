@@ -27,6 +27,7 @@ import {
   resolveSidebarPinView,
   sidebarPinTabForSection,
   SIDEBAR_PIN_TAB_DROP_ID,
+  SIDEBAR_THREADS_TAB_DROP_ID,
   sidebarMarkerId,
   planSidebarThreadDrop,
   resolveSidebarReorderableThreadKeys,
@@ -1265,8 +1266,47 @@ describe("Working shelf (beta)", () => {
         expect(plan.kind === "pin" && plan.order).toEqual(["a1", "p1", "p2"]);
       });
 
+      it("unpins a pin dropped on the Threads tab to wherever it sorts unpinned", () => {
+        const target = resolveSidebarDropTarget(pinnedTab, "p2", SIDEBAR_THREADS_TAB_DROP_ID);
+        expect(target?.section).toBe("active");
+        const plan = (activeSection: "pinned" | "active") =>
+          planSidebarThreadDrop({
+            activeKey: "p2",
+            activeSection,
+            target: target!,
+            pinnedOrder: ["p1", "p2", "p3"],
+            pinnedKeysById: new Map([
+              ["p1", "a"],
+              ["p2", "m"],
+              ["p3", "t"],
+            ]),
+            reorderableKeys: new Set(["p1", "p2", "p3"]),
+            // Manually ordered, so a drop between rows would write an order key.
+            activeOrder: ["a1", "a2"],
+            activeKeysById: new Map([
+              ["a1", "c"],
+              ["a2", "k"],
+            ]),
+            activeReorderableKeys: new Set(["a1", "a2", "p2"]),
+            pinnedRowsOnly: true,
+          });
+        expect(plan("pinned")).toEqual({
+          kind: "move-active",
+          order: null,
+          assignments: [],
+          unpin: true,
+          unsettle: false,
+          unsnooze: false,
+        });
+        // A thread already among the others has nothing to unpin.
+        expect(plan("active")).toEqual({ kind: "none" });
+      });
+
       it("ignores a drop on the tab for a row that is not in the list", () => {
         expect(resolveSidebarDropTarget(threadsTab, "missing", SIDEBAR_PIN_TAB_DROP_ID)).toBeNull();
+        expect(
+          resolveSidebarDropTarget(pinnedTab, "missing", SIDEBAR_THREADS_TAB_DROP_ID),
+        ).toBeNull();
         expect(
           resolveSidebarDropTarget(threadsTab, "settled-header", SIDEBAR_PIN_TAB_DROP_ID),
         ).toBeNull();

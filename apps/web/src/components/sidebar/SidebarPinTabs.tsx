@@ -1,7 +1,11 @@
 import { useDroppable } from "@dnd-kit/core";
 import { type KeyboardEvent, useRef } from "react";
 import { cn } from "~/lib/utils";
-import { SIDEBAR_PIN_TAB_DROP_ID, type SidebarPinTab } from "../Sidebar.logic";
+import {
+  SIDEBAR_PIN_TAB_DROP_ID,
+  SIDEBAR_THREADS_TAB_DROP_ID,
+  type SidebarPinTab,
+} from "../Sidebar.logic";
 
 const TABS: ReadonlyArray<{ readonly tab: SidebarPinTab; readonly label: string }> = [
   { tab: "pinned", label: "Pinned" },
@@ -13,23 +17,27 @@ export const sidebarPinTabPanelId = (idPrefix: string) => `${idPrefix}-panel`;
 
 /**
  * Switches the thread list between the pinned threads and everything else. While a thread is
- * dragged on the Threads tab, the Pinned tab is where it can be dropped to pin it.
+ * dragged, the other tab is where it can be dropped: Pinned pins it, Threads unpins it.
  */
 export function SidebarPinTabs(props: {
   idPrefix: string;
   tab: SidebarPinTab;
   pinnedCount: number;
   threadsCount: number;
-  /** A thread is being dragged that the Pinned tab can take. */
+  /** A thread is being dragged that the other tab can take. */
   dragging: boolean;
-  /** The dragged thread is over the Pinned tab. */
+  /** The dragged thread is over the other tab. */
   dropTargeted: boolean;
   onSelect: (tab: SidebarPinTab) => void;
 }) {
+  // Each tab takes drops only from the other one, which lists the rows it does not.
   const { setNodeRef: setPinnedDropRef } = useDroppable({
     id: SIDEBAR_PIN_TAB_DROP_ID,
-    // Pins are dropped from the Threads tab; the Pinned tab already lists them.
     disabled: props.tab !== "threads",
+  });
+  const { setNodeRef: setThreadsDropRef } = useDroppable({
+    id: SIDEBAR_THREADS_TAB_DROP_ID,
+    disabled: props.tab !== "pinned",
   });
   const tabRefs = useRef(new Map<SidebarPinTab, HTMLButtonElement>());
   const moveTo = (event: KeyboardEvent, tab: SidebarPinTab) => {
@@ -59,14 +67,15 @@ export function SidebarPinTabs(props: {
       {TABS.map(({ tab, label }) => {
         const count = tab === "pinned" ? props.pinnedCount : props.threadsCount;
         const selected = props.tab === tab;
-        const isDropZone = tab === "pinned" && props.dragging;
+        const isDropZone = !selected && props.dragging;
+        const isDropTarget = isDropZone && props.dropTargeted;
         return (
           <button
             key={tab}
             ref={(node) => {
               if (node === null) tabRefs.current.delete(tab);
               else tabRefs.current.set(tab, node);
-              if (tab === "pinned") setPinnedDropRef(node);
+              (tab === "pinned" ? setPinnedDropRef : setThreadsDropRef)(node);
             }}
             type="button"
             role="tab"
@@ -76,7 +85,8 @@ export function SidebarPinTabs(props: {
             aria-label={`${label}, ${count} ${count === 1 ? "thread" : "threads"}`}
             tabIndex={selected ? 0 : -1}
             data-testid={`sidebar-pin-tab-${tab}`}
-            data-drop-target={isDropZone && props.dropTargeted ? "" : undefined}
+            data-drop-zone={isDropZone ? "" : undefined}
+            data-drop-target={isDropTarget ? "" : undefined}
             onClick={() => props.onSelect(tab)}
             className={cn(
               "flex h-7 min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-transparent px-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
@@ -84,7 +94,8 @@ export function SidebarPinTabs(props: {
                 ? "bg-sidebar-row-active text-sidebar-foreground light:ring-1 light:ring-inset light:ring-sidebar-border/70"
                 : "text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
               isDropZone && "border-dashed border-sidebar-foreground/25",
-              isDropZone && props.dropTargeted && "border-primary/40 bg-primary/5 text-primary",
+              isDropTarget &&
+                "border-solid border-primary/60 bg-primary/10 text-primary ring-1 ring-inset ring-primary/40",
             )}
           >
             <span className="truncate">{label}</span>
