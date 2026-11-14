@@ -191,6 +191,8 @@ export interface FakeThread {
   readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
   /** Marks the thread's agent as running, which the sidebar shows as working. */
   readonly status?: "running";
+  /** Pins the thread; pins list in this key's order. */
+  readonly pinOrderKey?: string;
 }
 
 /** A thread of `turns` user prompts, each answered in markdown with a list and inline code. */
@@ -259,6 +261,7 @@ function shellOf(thread: FakeThread): OrchestrationV2ThreadShell {
     settledAt: null,
     lastVisitedAt: AT,
     deletedAt: null,
+    ...(thread.pinOrderKey === undefined ? {} : { pinnedAt: AT, pinOrderKey: thread.pinOrderKey }),
   };
 }
 
