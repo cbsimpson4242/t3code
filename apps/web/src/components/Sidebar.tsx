@@ -138,7 +138,7 @@ import { registerSettleAndAdvance } from "../settleAndAdvance";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useBoringSidebarEnabled, useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
-import { useLocalStorage } from "../hooks/useLocalStorage";
+import { removeLocalStorageItem, useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
 import {
   useEnvironmentIdentities,
@@ -201,6 +201,7 @@ import {
   reduceSidebarProjectScopeMenuState,
   resolveAdjacentThreadId,
   resolveSidebarPinView,
+  sidebarPinTabForSection,
   resolveSidebarSweepKeys,
   resolveSidebarDropTarget,
   resolveSidebarDropVerb,
@@ -347,6 +348,8 @@ const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
 const SIDEBAR_PIN_TAB_KEY = "t3code:sidebar:pin-tab";
 const SidebarPinTabSchema = Schema.Literals(["pinned", "threads"]);
+// The open state of the collapsible Pinned shelf the tabs replaced.
+const LEGACY_PINNED_SHELF_EXPANDED_KEY = "t3code:sidebar:pinned-expanded";
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
@@ -449,6 +452,8 @@ function useSidebarThreads(input: {
   readonly threads: readonly EnvironmentThreadShell[];
   readonly delegatedUnderParent: ReadonlySet<string>;
   readonly routeRowThreadKey: string | null;
+  // The row a route change is still revealing, or null; it opens the tab that lists the row.
+  readonly revealRowThreadKey: string | null;
   // Set in boring mode: the project groups to fold active threads into, in order.
   readonly folderGroups: readonly SidebarProjectSnapshot[] | null;
   // Keeps folders with no active threads, so a project the user filtered to or pinned can start one.
@@ -463,6 +468,7 @@ function useSidebarThreads(input: {
     threads,
     delegatedUnderParent,
     routeRowThreadKey,
+    revealRowThreadKey,
     folderGroups,
     keepEmptyFolders: keepEmpty,
   } = input;
@@ -493,6 +499,12 @@ function useSidebarThreads(input: {
     "threads",
     SidebarPinTabSchema,
   );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- drops the stored open state of the Pinned shelf the tabs replaced
+  useEffect(() => {
+    try {
+      removeLocalStorageItem(LEGACY_PINNED_SHELF_EXPANDED_KEY);
+    } catch {}
+  }, []);
   const [settledShelfExpanded, setSettledShelfExpanded] = useLocalStorage(
     SETTLED_SHELF_EXPANDED_KEY,
     false,
@@ -536,6 +548,16 @@ function useSidebarThreads(input: {
 
   const { pinnedThreads, activeThreads, workingThreads, snoozedThreads, settledThreads } =
     partition;
+  const sectionByThreadKey = new Map<string, SidebarSection>();
+  for (const [list, section] of [
+    [pinnedThreads, "pinned"],
+    [activeThreads, "active"],
+    [workingThreads, "working"],
+    [snoozedThreads, "snoozed"],
+    [settledThreads, "settled"],
+  ] as const) {
+    for (const thread of list) sectionByThreadKey.set(threadShellKey(thread), section);
+  }
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
   const olderSettledShelf = useOlderSettledShelf({
     scopes: olderSettledScopes([...serverConfigs.keys()], scopedProjectKeys),
@@ -563,6 +585,23 @@ function useSidebarThreads(input: {
     ? visibleSettledThreads
     : routeThreadOnly(visibleSettledThreads, routeRowThreadKey);
   const pinView = resolveSidebarPinView(pinTab, pinnedThreads.length);
+  // History, the palette, links and new threads can open a thread the other tab lists. Each
+  // route change opens that tab once, as a reveal widens the project scope, and the tab stays
+  // remembered; the user may switch back. Clicks and jump shortcuts open rows on the visible tab.
+  const revealTab =
+    revealRowThreadKey === null
+      ? undefined
+      : sidebarPinTabForSection(sectionByThreadKey.get(revealRowThreadKey));
+  const revealedTabKeyRef = useRef<string | null>(null);
+  const hasPins = pinnedThreads.length > 0;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a route reveal writes the tab that lists the opened thread to the remembered tab, once per route change
+  useEffect(() => {
+    // Without pins there is no strip yet; pins another environment loads later still get the reveal.
+    if (revealRowThreadKey === null || revealTab === undefined || !hasPins) return;
+    if (revealedTabKeyRef.current === revealRowThreadKey) return;
+    revealedTabKeyRef.current = revealRowThreadKey;
+    if (revealTab !== pinTab) setPinTab(revealTab);
+  }, [hasPins, pinTab, revealRowThreadKey, revealTab, revealedTabKeyRef, setPinTab]);
   const visibleSnoozedThreads = snoozedShelfExpanded
     ? snoozedThreads
     : routeThreadOnly(snoozedThreads, routeRowThreadKey);
@@ -601,16 +640,6 @@ function useSidebarThreads(input: {
           ...visibleSnoozedThreads,
           ...renderedSettledThreads,
         ];
-  const sectionByThreadKey = new Map<string, SidebarSection>();
-  for (const [list, section] of [
-    [pinnedThreads, "pinned"],
-    [activeThreads, "active"],
-    [workingThreads, "working"],
-    [snoozedThreads, "snoozed"],
-    [settledThreads, "settled"],
-  ] as const) {
-    for (const thread of list) sectionByThreadKey.set(threadShellKey(thread), section);
-  }
   return {
     ...partition,
     threads,
@@ -1187,14 +1216,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // scrolled away; a remount starts at the top, so each mount scrolls to the open
   // thread once. Render decides the widening, so the first frame of the new route
   // already lists the row; the active row's ref callback scrolls to it.
-  const { widensScope: revealWidensScope } = resolveSidebarRouteReveal({
-    reveal: routeReveal,
-    routeKey: routeRowThreadKey,
-    isSearching: isSearchingThreads,
-    scopedProjectKeys: chosenScopeProjectKeys,
-    delegatedUnderParent,
-    findThread: (key) => threads.find((candidate) => threadShellKey(candidate) === key),
-  });
+  const { widensScope: revealWidensScope, pendingKey: pendingRevealKey } =
+    resolveSidebarRouteReveal({
+      reveal: routeReveal,
+      routeKey: routeRowThreadKey,
+      isSearching: isSearchingThreads,
+      scopedProjectKeys: chosenScopeProjectKeys,
+      delegatedUnderParent,
+      findThread: (key) => threads.find((candidate) => threadShellKey(candidate) === key),
+    });
   const projectScopeKeys = revealWidensScope ? [] : chosenProjectScopeKeys;
   const projectScopeKey = projectScopeKeys.length === 0 ? null : projectScopeKeys.join("\n");
   const toggleProjectScopeKey = (key: string) =>
@@ -1399,6 +1429,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     threads,
     delegatedUnderParent,
     routeRowThreadKey,
+    // Search results replace the list, so the reveal waits for the list to return.
+    revealRowThreadKey: isSearchingThreads ? null : pendingRevealKey,
     folderGroups: boringSidebarEnabled
       ? scopedProjectGroups.length === 0
         ? // An archived project keeps a folder for its active threads, below the rest.
@@ -2155,6 +2187,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             activeReorderableKeys: activeReorderableThreadKeys,
             activeTimeOrdered: workingShelfEnabled,
             pinnedRowsHidden: pinView === "threads",
+            pinnedRowsOnly: pinView === "pinned",
           }).kind !== "none"
         );
       },
@@ -2190,6 +2223,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       activeReorderableKeys: activeReorderableThreadKeys,
       activeTimeOrdered: workingShelfEnabled,
       pinnedRowsHidden: pinView === "threads",
+      pinnedRowsOnly: pinView === "pinned",
     });
     if (plan.kind === "none") return;
     if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;

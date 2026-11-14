@@ -25,6 +25,7 @@ import {
   sortInboxThreadsByReturn,
   resolveSidebarDropTarget,
   resolveSidebarPinView,
+  sidebarPinTabForSection,
   SIDEBAR_PIN_TAB_DROP_ID,
   sidebarMarkerId,
   planSidebarThreadDrop,
@@ -1235,6 +1236,15 @@ describe("Working shelf (beta)", () => {
         expect(resolveSidebarPinView("threads", 2)).toBe("threads");
       });
 
+      it("finds the tab that lists a thread a route change reveals", () => {
+        expect(sidebarPinTabForSection("pinned")).toBe("pinned");
+        for (const section of ["active", "working", "snoozed", "settled"] as const) {
+          expect(sidebarPinTabForSection(section)).toBe("threads");
+        }
+        // A thread whose shell has not arrived yet waits.
+        expect(sidebarPinTabForSection(undefined)).toBeUndefined();
+      });
+
       it("pins a thread dropped on the Pinned tab to the top of every pin", () => {
         const target = resolveSidebarDropTarget(threadsTab, "a1", SIDEBAR_PIN_TAB_DROP_ID);
         expect(target?.section).toBe("pinned");
@@ -1293,6 +1303,30 @@ describe("Working shelf (beta)", () => {
           pinnedRowsHidden: false,
         });
         expect(plan.kind === "reorder-pinned" && plan.order).toEqual(["p2", "p3", "p1"]);
+      });
+
+      it("never unpins a thread dropped past the last pin on the Pinned tab", () => {
+        // The trailing divider has no visible Active label on the Pinned tab.
+        const target = resolveSidebarDropTarget(pinnedTab, "p1", sidebarMarkerId("pinned-divider"));
+        expect(target?.section).toBe("active");
+        const plan = (pinnedRowsOnly: boolean) =>
+          planSidebarThreadDrop({
+            activeKey: "p1",
+            activeSection: "pinned",
+            target: target!,
+            pinnedOrder: ["p1", "p2", "p3"],
+            pinnedKeysById: new Map([
+              ["p1", "a"],
+              ["p2", "m"],
+              ["p3", "t"],
+            ]),
+            reorderableKeys: new Set(["p1", "p2", "p3"]),
+            activeOrder: [],
+            activeKeysById: new Map(),
+            pinnedRowsOnly,
+          });
+        expect(plan(false).kind).toBe("move-active");
+        expect(plan(true)).toEqual({ kind: "none" });
       });
     });
 

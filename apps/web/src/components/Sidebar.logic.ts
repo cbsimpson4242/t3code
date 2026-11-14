@@ -185,6 +185,14 @@ export function resolveSidebarPinView(stored: SidebarPinTab, pinnedCount: number
   return pinnedCount === 0 ? "plain" : stored;
 }
 
+/** The tab that lists a thread in `section`, or undefined for a thread the list does not have. */
+export function sidebarPinTabForSection(
+  section: SidebarSection | undefined,
+): SidebarPinTab | undefined {
+  if (section === undefined) return undefined;
+  return section === "pinned" ? "pinned" : "threads";
+}
+
 /** The Pinned tab is a drop target outside the sortable list. */
 export const SIDEBAR_PIN_TAB_DROP_ID = "sidebar-pin-tab";
 
@@ -410,6 +418,11 @@ export function planSidebarThreadDrop(input: {
    * the top of the pins and the order comes from every pinned thread rather than the rows on screen.
    */
   readonly pinnedRowsHidden?: boolean;
+  /**
+   * The Pinned tab lists only pins and shows no Active label, so a drop past the last pin must
+   * not unpin the thread through a slot the user cannot see.
+   */
+  readonly pinnedRowsOnly?: boolean;
 }): SidebarThreadDropPlan {
   const {
     activeKey,
@@ -425,6 +438,7 @@ export function planSidebarThreadDrop(input: {
     activeReorderableKeys,
   } = input;
   if (activeSection === "working") return { kind: "none" };
+  if (input.pinnedRowsOnly && target.section !== "pinned") return { kind: "none" };
   if (input.supportsSettlement === false && (target.section === "settled" || activeSettled)) {
     return { kind: "none" };
   }
