@@ -71,6 +71,7 @@ import {
 } from "lucide-react";
 import {
   useEffect,
+  useId,
   useLayoutEffect,
   useReducer,
   useRef,
@@ -199,6 +200,7 @@ import {
   planSidebarThreadDrop,
   reduceSidebarProjectScopeMenuState,
   resolveAdjacentThreadId,
+  resolveSidebarPinView,
   resolveSidebarSweepKeys,
   resolveSidebarDropTarget,
   resolveSidebarDropVerb,
@@ -216,7 +218,9 @@ import {
   useSnoozeWakeClock,
   useThreadJumpHintsVisible,
   type SidebarListItem,
+  type SidebarPinTab,
   type SidebarSection,
+  SIDEBAR_PIN_TAB_DROP_ID,
   resolveSidebarRowThreadId,
   resolveThreadDescendantCompletedAt,
   resolveThreadKeysWithRunningDescendants,
@@ -276,6 +280,7 @@ import {
   type SidebarSweepAction,
 } from "./sidebar/SidebarThreadRow";
 import { SidebarDraftBlock } from "./sidebar/SidebarDraftBlock";
+import { SidebarPinTabs, sidebarPinTabId, sidebarPinTabPanelId } from "./sidebar/SidebarPinTabs";
 import {
   SidebarProjectFolderHeader,
   sidebarFolderRowId,
@@ -340,7 +345,8 @@ const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
 
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
-const PINNED_SHELF_EXPANDED_KEY = "t3code:sidebar:pinned-expanded";
+const SIDEBAR_PIN_TAB_KEY = "t3code:sidebar:pin-tab";
+const SidebarPinTabSchema = Schema.Literals(["pinned", "threads"]);
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
@@ -482,11 +488,10 @@ function useSidebarThreads(input: {
   const nowMinute = useNowMinute();
   // Minute-quantized clocks would delay second-precise snooze wakes by up to a minute.
   const snoozeWakeClock = useSnoozeWakeClock(threads);
-  // Open by default, so pinned threads stay listed until the user collapses the shelf.
-  const [pinnedShelfExpanded, setPinnedShelfExpanded] = useLocalStorage(
-    PINNED_SHELF_EXPANDED_KEY,
-    true,
-    Schema.Boolean,
+  const [pinTab, setPinTab] = useLocalStorage<SidebarPinTab, SidebarPinTab>(
+    SIDEBAR_PIN_TAB_KEY,
+    "threads",
+    SidebarPinTabSchema,
   );
   const [settledShelfExpanded, setSettledShelfExpanded] = useLocalStorage(
     SETTLED_SHELF_EXPANDED_KEY,
@@ -557,9 +562,7 @@ function useSidebarThreads(input: {
   const renderedSettledThreads = settledShelfExpanded
     ? visibleSettledThreads
     : routeThreadOnly(visibleSettledThreads, routeRowThreadKey);
-  const visiblePinnedThreads = pinnedShelfExpanded
-    ? pinnedThreads
-    : routeThreadOnly(pinnedThreads, routeRowThreadKey);
+  const pinView = resolveSidebarPinView(pinTab, pinnedThreads.length);
   const visibleSnoozedThreads = snoozedShelfExpanded
     ? snoozedThreads
     : routeThreadOnly(snoozedThreads, routeRowThreadKey);
@@ -586,15 +589,18 @@ function useSidebarThreads(input: {
               : EMPTY_THREADS,
           };
         });
-  const orderedThreads = [
-    ...visiblePinnedThreads,
-    ...(projectFolders === null
-      ? activeThreads
-      : projectFolders.flatMap((folder) => folder.threads)),
-    ...visibleWorkingThreads,
-    ...visibleSnoozedThreads,
-    ...renderedSettledThreads,
-  ];
+  // Each tab lists only its own rows, so shortcuts and range selection follow the visible one.
+  const orderedThreads =
+    pinView === "pinned"
+      ? pinnedThreads
+      : [
+          ...(projectFolders === null
+            ? activeThreads
+            : projectFolders.flatMap((folder) => folder.threads)),
+          ...visibleWorkingThreads,
+          ...visibleSnoozedThreads,
+          ...renderedSettledThreads,
+        ];
   const sectionByThreadKey = new Map<string, SidebarSection>();
   for (const [list, section] of [
     [pinnedThreads, "pinned"],
@@ -625,8 +631,11 @@ function useSidebarThreads(input: {
         scopeKey: current.scopeKey,
         count: current.count + SETTLED_TAIL_PAGE_COUNT,
       })),
-    pinnedShelfExpanded,
-    togglePinnedShelf: () => setPinnedShelfExpanded((value) => !value),
+    pinView,
+    selectPinTab: setPinTab,
+    // Mobile counts the same: the open rows plus each shelf's full count.
+    threadsTabCount:
+      activeThreads.length + workingThreads.length + snoozedThreads.length + settledCount,
     settledShelfExpanded,
     toggleSettledShelf: () => setSettledShelfExpanded((value) => !value),
     snoozedShelfExpanded,
@@ -639,7 +648,6 @@ function useSidebarThreads(input: {
       setProjectExpanded(keys, !resolveProjectExpanded(projectExpandedById, keys));
     },
     renderedSettledThreads,
-    visiblePinnedThreads,
     visibleSnoozedThreads,
     visibleWorkingThreads,
     orderedThreadKeys: orderedThreads.map(threadShellKey),
@@ -1097,6 +1105,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       : null;
   const [renamingTitle, setRenamingTitle] = useState("");
   const settlingThreadKeysRef = useRef(new Set<string>());
+  const pinTabsId = useId();
   const threadListRef = useRef<HTMLElement | null>(null);
   const sidebarContentRef = useRef<HTMLDivElement | null>(null);
   const dragLabelOffsetRef = useRef(0);
@@ -1358,8 +1367,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     olderSettledShelf,
     hiddenSettledCount,
     showMoreSettled,
-    pinnedShelfExpanded,
-    togglePinnedShelf,
+    pinView,
+    selectPinTab,
+    threadsTabCount,
     settledShelfExpanded,
     toggleSettledShelf,
     snoozedShelfExpanded,
@@ -1369,7 +1379,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     projectFolders,
     toggleProjectFolder,
     renderedSettledThreads,
-    visiblePinnedThreads,
     visibleSnoozedThreads,
     visibleWorkingThreads,
     orderedThreadKeys,
@@ -1733,11 +1742,28 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   };
   const restrictBelowPins: Modifier = (args) =>
     restrictBelowSidebarLabel(args, dragLabelOffsetRef.current);
-  const dndModifiers = [
-    restrictToVerticalAxis,
-    restrictBelowPins,
-    restrictToFirstScrollableAncestor,
-  ];
+  // The Pinned tab sits above the first row. A row dragged there may hang above the viewport,
+  // so the pointer can reach the tab however low on the row it grabbed.
+  const restrictToScrollViewportBelowTab: Modifier = (args) => {
+    const viewport = args.scrollableAncestorRects[0];
+    return restrictToFirstScrollableAncestor({
+      ...args,
+      scrollableAncestorRects:
+        viewport && args.draggingNodeRect
+          ? [
+              {
+                ...viewport,
+                top: viewport.top - args.draggingNodeRect.height,
+                height: viewport.height + args.draggingNodeRect.height,
+              },
+            ]
+          : args.scrollableAncestorRects,
+    });
+  };
+  const dndModifiers =
+    pinView === "threads"
+      ? [restrictToVerticalAxis, restrictToScrollViewportBelowTab]
+      : [restrictToVerticalAxis, restrictBelowPins, restrictToFirstScrollableAncestor];
   const attachListMotionRef = (node: HTMLUListElement) => {
     const motion = createSidebarListMotion(node);
     listMotionRef.current = motion;
@@ -1989,10 +2015,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     ) {
       return [];
     }
-    const items: SidebarListItem[] = [{ kind: "marker", marker: "pinned-header" }];
-    const pinnedRows = rowsOf(visiblePinnedThreads, "pinned");
-    items.push(...pinnedRows);
-    items.push({ kind: "marker", marker: "pinned-divider" });
+    if (pinView === "pinned") {
+      // Only the divider, so the rows sit in the Pinned section.
+      return [...rowsOf(pinnedThreads, "pinned"), { kind: "marker", marker: "pinned-divider" }];
+    }
+    const items: SidebarListItem[] = [];
+    // The Threads tab has no Pinned section; its pins drop on the tab instead.
+    if (pinView === "plain") {
+      items.push({ kind: "marker", marker: "pinned-header" });
+      items.push({ kind: "marker", marker: "pinned-divider" });
+    }
     const activeRows = rowsOf(activeThreads, "active");
     items.push({ kind: "marker", marker: "active-placeholder" });
     items.push(...activeRows);
@@ -2046,7 +2078,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // Cache on both fields so layout-key changes trigger the effect even when animate is unchanged.
   const listMotionPass = { layoutKey: listMotionLayoutKey, animate: listMotionAnimate };
   const shelfExpansionKey = [
-    pinnedShelfExpanded,
+    pinView,
     workingShelfExpanded,
     snoozedShelfExpanded,
     settledShelfExpanded,
@@ -2091,8 +2123,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     settledVisibleCount,
     routeThreadKey: routeRowThreadKey,
     snoozedThreadCount: snoozedThreads.length,
-    pinnedShelf: pinnedThreads.length > 0,
   });
+  // The Threads tab lists no pinned rows to drop between, so a pin is dropped on the tab.
+  const pinTabDropEnabled = pinView === "threads";
+  const pinTabDragging = pinTabDropEnabled && dragState !== null && !isContextDrag;
   const draggedThreadKey = dragState?.activeKey;
   const draggedFromSection = dragState?.activeSection;
   const dragActivationY = dragState?.activationY;
@@ -2120,13 +2154,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             activeKeysById,
             activeReorderableKeys: activeReorderableThreadKeys,
             activeTimeOrdered: workingShelfEnabled,
-            pinnedCollapsed: !pinnedShelfExpanded,
+            pinnedRowsHidden: pinView === "threads",
           }).kind !== "none"
         );
       },
       {
         items: sidebarListItems,
         activationY: dragActivationY ?? null,
+        ...(pinTabDropEnabled ? { pinTabId: SIDEBAR_PIN_TAB_DROP_ID } : {}),
       },
     );
   })();
@@ -2154,7 +2189,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       activeKeysById,
       activeReorderableKeys: activeReorderableThreadKeys,
       activeTimeOrdered: workingShelfEnabled,
-      pinnedCollapsed: !pinnedShelfExpanded,
+      pinnedRowsHidden: pinView === "threads",
     });
     if (plan.kind === "none") return;
     if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;
@@ -3378,6 +3413,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 onDragOver={handleThreadDragOver}
                 onDragEnd={handleThreadDragEnd}
               >
+                {pinView === "plain" ? null : (
+                  <SidebarPinTabs
+                    idPrefix={pinTabsId}
+                    tab={pinView}
+                    pinnedCount={pinnedThreads.length}
+                    threadsCount={threadsTabCount}
+                    dragging={pinTabDragging}
+                    dropTargeted={pinTabDragging && dragTargetSection === "pinned"}
+                    onSelect={selectPinTab}
+                  />
+                )}
                 <SortableContext items={sortableIds} strategy={sidebarSortingStrategy}>
                   {(() => {
                     const renderThreadRow = (
@@ -3421,10 +3467,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           }
                           navigationParent={
                             folderRow ??
-                            (section === "pinned" ||
-                            section === "working" ||
-                            section === "snoozed" ||
-                            section === "settled"
+                            (section === "working" || section === "snoozed" || section === "settled"
                               ? `shelf:${section}`
                               : undefined)
                           }
@@ -3505,17 +3548,21 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     // from the tile grid so they can sit at the bottom of the tray.
                     const settledHeaderItems: ReactNode[] = [];
                     const settledItems: ReactNode[] = [];
-                    const items: ReactNode[] = [
-                      <SidebarDraftBlock
-                        key="draft-sessions"
-                        projectByKey={projectByKey}
-                        projectDisplayNameByKey={projectDisplayNameByKey}
-                        scopedProjectKeys={scopedProjectKeys}
-                        routeDraftId={routeDraftIdForRows}
-                        onNavigateToDraft={navigateToDraft}
-                        onDraftContextMenu={handleDraftContextMenu}
-                      />,
-                    ];
+                    // Drafts are never pinned, so they belong to the Threads tab.
+                    const items: ReactNode[] =
+                      pinView === "pinned"
+                        ? []
+                        : [
+                            <SidebarDraftBlock
+                              key="draft-sessions"
+                              projectByKey={projectByKey}
+                              projectDisplayNameByKey={projectDisplayNameByKey}
+                              scopedProjectKeys={scopedProjectKeys}
+                              routeDraftId={routeDraftIdForRows}
+                              onNavigateToDraft={navigateToDraft}
+                              onDraftContextMenu={handleDraftContextMenu}
+                            />,
+                          ];
                     const settledOut = isSimpleThreadView ? settledItems : items;
                     const settledHeaderOut = isSimpleThreadView ? settledHeaderItems : items;
                     for (const item of sidebarListItems) {
@@ -3554,31 +3601,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       }
                       switch (item.marker) {
                         case "pinned-header":
-                          // With pinned threads the header is a collapsible shelf like Settled's;
-                          // without, it stays the drag label that shows where a pin would land.
+                          // Shows where a pin would land while nothing is pinned.
                           items.push(
-                            pinnedThreads.length > 0 ? (
-                              <SidebarSectionHeader
-                                key="pinned-shelf-header"
-                                marker="pinned-header"
-                                label="Pinned"
-                                count={pinnedThreads.length}
-                                dragging={from !== null}
-                                isDropTarget={dragTargetSection === "pinned"}
-                                toggle={{
-                                  expanded: pinnedShelfExpanded,
-                                  onToggle: togglePinnedShelf,
-                                }}
-                              />
-                            ) : (
-                              <SidebarDragBoundary
-                                key="pinned-header"
-                                marker="pinned-header"
-                                label="Pinned"
-                                visible={from !== null}
-                                isDropTarget={dragTargetSection === "pinned"}
-                              />
-                            ),
+                            <SidebarDragBoundary
+                              key="pinned-header"
+                              marker="pinned-header"
+                              label="Pinned"
+                              visible={from !== null}
+                              isDropTarget={dragTargetSection === "pinned"}
+                            />,
                           );
                           break;
                         case "pinned-divider":
@@ -3587,7 +3618,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               key="pinned-divider"
                               marker="pinned-divider"
                               label="Active"
-                              visible={from !== null}
+                              // The Pinned tab has no Active section to drag into.
+                              visible={from !== null && pinView === "plain"}
                               isDropTarget={dragTargetSection === "active"}
                             />,
                           );
@@ -3714,7 +3746,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       isSimpleThreadView ? SIDEBAR_SIMPLE_GRID_CLASS_NAME : "flex flex-col",
                       actionSweep !== null && "**:pointer-events-none",
                     );
-                    return isSimpleThreadView ? (
+                    const list = isSimpleThreadView ? (
                       <div ref={attachThreadRowsRef} className="flex flex-1 flex-col">
                         <ul
                           ref={attachListMotionRef}
@@ -3750,6 +3782,18 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       >
                         {items}
                       </ul>
+                    );
+                    return (
+                      <div
+                        role={pinView === "plain" ? undefined : "tabpanel"}
+                        id={pinView === "plain" ? undefined : sidebarPinTabPanelId(pinTabsId)}
+                        aria-labelledby={
+                          pinView === "plain" ? undefined : sidebarPinTabId(pinTabsId, pinView)
+                        }
+                        className="flex flex-1 flex-col"
+                      >
+                        {list}
+                      </div>
                     );
                   })()}
                 </SortableContext>

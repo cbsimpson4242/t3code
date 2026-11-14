@@ -33,15 +33,43 @@ export function createSidebarCollisionDetection(
   options: {
     items?: readonly SidebarListItem[];
     activationY?: number | null;
+    /** The Pinned tab's droppable id while it accepts drops; only the pointer over it selects it. */
+    pinTabId?: string;
   } = {},
 ): CollisionDetection {
   const validity = new Map<string, boolean>();
   const sections = new Map<string, SidebarSection | null>();
   let previousPointerY = options.activationY;
   let boundarySection: "pinned" | "active" | undefined;
+  const { pinTabId } = options;
   return (args) => {
-    let collisions = closestCenter(args);
     const pointer = args.pointerCoordinates;
+    const pinTabRect = pinTabId === undefined ? undefined : args.droppableRects.get(pinTabId);
+    if (
+      pinTabId !== undefined &&
+      pinTabRect &&
+      pointer &&
+      pointer.x >= pinTabRect.left &&
+      pointer.x <= pinTabRect.right &&
+      pointer.y >= pinTabRect.top &&
+      pointer.y <= pinTabRect.bottom
+    ) {
+      const container = args.droppableContainers.find((candidate) => candidate.id === pinTabId);
+      const valid = validity.get(pinTabId) ?? isValidTarget(pinTabId);
+      validity.set(pinTabId, valid);
+      if (container && valid)
+        return [{ id: pinTabId, data: { droppableContainer: container, value: 0 } }];
+    }
+    let collisions = closestCenter(
+      pinTabId === undefined
+        ? args
+        : {
+            ...args,
+            droppableContainers: args.droppableContainers.filter(
+              (container) => container.id !== pinTabId,
+            ),
+          },
+    );
     const items = options.items;
     const source = items?.find((item) => item.kind === "thread" && item.key === args.active.id);
     const boundary = args.droppableContainers
@@ -98,8 +126,6 @@ export function createSidebarSortingStrategy(input: {
   settledVisibleCount?: number;
   routeThreadKey?: string | null;
   snoozedThreadCount?: number;
-  /** The Pinned header is a collapsible row, not the zero-height drag label. */
-  pinnedShelf?: boolean;
   cardHeight?: number;
   slimHeight?: number;
   boundaryLabelHeight?: number;
@@ -169,14 +195,18 @@ export function createSidebarSortingStrategy(input: {
     }
     groups.settled = visible.map((key) => ({ kind: "thread", key, section: "settled" }));
     const projected: SidebarListItem[] = [];
+    const hasMarker = (name: SidebarListMarker) =>
+      items.some((item) => item.kind === "marker" && item.marker === name);
     const marker = (name: SidebarListMarker) => projected.push({ kind: "marker", marker: name });
     const section = (name: "active" | "settled") => {
       if (groups[name].length > 0) projected.push(...groups[name]);
       else marker(`${name}-placeholder`);
     };
-    marker("pinned-header");
+    // The tabs list rows of one side only, so the Threads tab has neither marker and the
+    // Pinned tab only the divider.
+    if (hasMarker("pinned-header")) marker("pinned-header");
     projected.push(...groups.pinned);
-    marker("pinned-divider");
+    if (hasMarker("pinned-divider")) marker("pinned-divider");
     section("active");
     if (items.some((item) => item.kind === "marker" && item.marker === "working-header")) {
       marker("working-header");
@@ -202,8 +232,7 @@ export function createSidebarSortingStrategy(input: {
           : slimHeight;
       const moved = item.kind === "thread" && item.key === active.key;
       return item.kind === "marker" &&
-        (item.marker === "pinned-divider" ||
-          (item.marker === "pinned-header" && input.pinnedShelf !== true))
+        (item.marker === "pinned-divider" || item.marker === "pinned-header")
         ? labelHeight
         : item.kind === "marker" && item.marker.endsWith("placeholder")
           ? slimHeight

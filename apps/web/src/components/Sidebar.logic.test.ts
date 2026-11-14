@@ -24,6 +24,9 @@ import {
   shouldRecedeSidebarThread,
   sortInboxThreadsByReturn,
   resolveSidebarDropTarget,
+  resolveSidebarPinView,
+  SIDEBAR_PIN_TAB_DROP_ID,
+  sidebarMarkerId,
   planSidebarThreadDrop,
   resolveSidebarReorderableThreadKeys,
   sortPinnedThreadsForSidebar,
@@ -1148,12 +1151,12 @@ describe("Working shelf (beta)", () => {
       },
     );
 
-    describe("dropping into a collapsed Pinned shelf", () => {
+    describe("dropping on the Pinned tab", () => {
       const dropOnPinnedShelf = (input: {
         readonly activeKey: string;
         readonly activeSection: SidebarSection;
         readonly visiblePinnedOrder: readonly string[];
-        readonly pinnedCollapsed: boolean;
+        readonly pinnedRowsHidden: boolean;
       }) =>
         planSidebarThreadDrop({
           activeKey: input.activeKey,
@@ -1171,7 +1174,7 @@ describe("Working shelf (beta)", () => {
           reorderableKeys: new Set(["a1", "p1", "p2"]),
           activeOrder: ["a1"],
           activeKeysById: new Map([["a1", null]]),
-          pinnedCollapsed: input.pinnedCollapsed,
+          pinnedRowsHidden: input.pinnedRowsHidden,
         });
 
       it("pins above the existing pins, since the rows to drop between are hidden", () => {
@@ -1179,7 +1182,7 @@ describe("Working shelf (beta)", () => {
           activeKey: "a1",
           activeSection: "active",
           visiblePinnedOrder: ["a1"],
-          pinnedCollapsed: true,
+          pinnedRowsHidden: true,
         });
         expect(plan.kind).toBe("pin");
         if (plan.kind !== "pin") return;
@@ -1188,25 +1191,108 @@ describe("Working shelf (beta)", () => {
         expect(plan.extraAssignments).toEqual([]);
       });
 
-      it("keeps the visible order when the Pinned shelf is open", () => {
+      it("keeps the visible order when the pinned rows are listed", () => {
         const plan = dropOnPinnedShelf({
           activeKey: "a1",
           activeSection: "active",
           visiblePinnedOrder: ["p1", "a1", "p2"],
-          pinnedCollapsed: false,
+          pinnedRowsHidden: false,
         });
         expect(plan.kind === "pin" && plan.order).toEqual(["p1", "a1", "p2"]);
       });
 
-      it("leaves a pinned thread where it is when it is dropped back on the collapsed shelf", () => {
+      it("leaves a pinned thread where it is when it is dropped back with the pins hidden", () => {
         expect(
           dropOnPinnedShelf({
             activeKey: "p1",
             activeSection: "pinned",
             visiblePinnedOrder: ["p1"],
-            pinnedCollapsed: true,
+            pinnedRowsHidden: true,
           }),
         ).toEqual({ kind: "none" });
+      });
+    });
+
+    describe("pin tabs", () => {
+      const threadsTab: readonly SidebarListItem[] = [
+        marker("active-placeholder"),
+        row("a1", "active"),
+        row("a2", "active"),
+        marker("settled-header"),
+        row("s1", "settled"),
+      ];
+      const pinnedTab: readonly SidebarListItem[] = [
+        row("p1", "pinned"),
+        row("p2", "pinned"),
+        row("p3", "pinned"),
+        marker("pinned-divider"),
+      ];
+
+      it("shows the plain list until something is pinned, then the remembered tab", () => {
+        expect(resolveSidebarPinView("pinned", 0)).toBe("plain");
+        expect(resolveSidebarPinView("threads", 0)).toBe("plain");
+        expect(resolveSidebarPinView("pinned", 2)).toBe("pinned");
+        expect(resolveSidebarPinView("threads", 2)).toBe("threads");
+      });
+
+      it("pins a thread dropped on the Pinned tab to the top of every pin", () => {
+        const target = resolveSidebarDropTarget(threadsTab, "a1", SIDEBAR_PIN_TAB_DROP_ID);
+        expect(target?.section).toBe("pinned");
+        const plan = planSidebarThreadDrop({
+          activeKey: "a1",
+          activeSection: "active",
+          target: target!,
+          pinnedOrder: ["p1", "p2"],
+          pinnedKeysById: new Map([
+            ["p1", "m"],
+            ["p2", "t"],
+          ]),
+          reorderableKeys: new Set(["a1", "p1", "p2"]),
+          activeOrder: ["a1", "a2"],
+          activeKeysById: new Map([["a1", null]]),
+          pinnedRowsHidden: true,
+        });
+        expect(plan.kind === "pin" && plan.order).toEqual(["a1", "p1", "p2"]);
+      });
+
+      it("ignores a drop on the tab for a row that is not in the list", () => {
+        expect(resolveSidebarDropTarget(threadsTab, "missing", SIDEBAR_PIN_TAB_DROP_ID)).toBeNull();
+        expect(
+          resolveSidebarDropTarget(threadsTab, "settled-header", SIDEBAR_PIN_TAB_DROP_ID),
+        ).toBeNull();
+      });
+
+      it("has no Pinned section on the Threads tab, so rows there never pin", () => {
+        for (const over of ["a2", sidebarMarkerId("active-placeholder")]) {
+          expect(resolveSidebarDropTarget(threadsTab, "a1", over)?.section).toBe("active");
+        }
+        expect(resolveSidebarDropTarget(threadsTab, "a1", "s1")?.section).toBe("settled");
+        expect(resolveSidebarDropTarget(threadsTab, "a1", "a2")?.pinnedOrder).toEqual([]);
+      });
+
+      it("reorders pins within the Pinned tab from the rows it lists", () => {
+        const target = resolveSidebarDropTarget(pinnedTab, "p1", "p3");
+        expect(target).toEqual({
+          section: "pinned",
+          pinnedOrder: ["p2", "p3", "p1"],
+          activeOrder: [],
+        });
+        const plan = planSidebarThreadDrop({
+          activeKey: "p1",
+          activeSection: "pinned",
+          target: target!,
+          pinnedOrder: ["p1", "p2", "p3"],
+          pinnedKeysById: new Map([
+            ["p1", "a"],
+            ["p2", "m"],
+            ["p3", "t"],
+          ]),
+          reorderableKeys: new Set(["p1", "p2", "p3"]),
+          activeOrder: [],
+          activeKeysById: new Map(),
+          pinnedRowsHidden: false,
+        });
+        expect(plan.kind === "reorder-pinned" && plan.order).toEqual(["p2", "p3", "p1"]);
       });
     });
 
