@@ -8,6 +8,7 @@ import {
 } from "./Sidebar.drag";
 import {
   resolveSidebarDropTarget,
+  SIDEBAR_PIN_TAB_DROP_ID,
   sidebarListItemId,
   sidebarMarkerId,
   type SidebarListItem,
@@ -99,6 +100,46 @@ describe("sidebar collision detection", () => {
       pointerCoordinates: null,
     } satisfies Parameters<CollisionDetection>[0];
   }
+
+  describe("Pinned tab", () => {
+    const tabRect = { top: 0, height: 28, bottom: 28, left: 0, right: 130, width: 130 };
+    const withTab = () => {
+      const args = collisionArgs();
+      return {
+        ...args,
+        droppableRects: new Map([...args.droppableRects, [SIDEBAR_PIN_TAB_DROP_ID, tabRect]]),
+        droppableContainers: [
+          ...args.droppableContainers,
+          {
+            id: SIDEBAR_PIN_TAB_DROP_ID,
+            key: SIDEBAR_PIN_TAB_DROP_ID,
+            disabled: false,
+            data: { current: {} },
+            node: { current: null },
+            rect: { current: tabRect },
+          },
+        ],
+      };
+    };
+    const ids = (detector: CollisionDetection, pointerCoordinates: { x: number; y: number }) =>
+      detector({ ...withTab(), pointerCoordinates }).map((collision) => collision.id);
+
+    it("is selected only while the pointer is over it", () => {
+      const detector = createSidebarCollisionDetection(() => true, {
+        pinTabId: SIDEBAR_PIN_TAB_DROP_ID,
+      });
+      expect(ids(detector, { x: 50, y: 10 })).toEqual([SIDEBAR_PIN_TAB_DROP_ID]);
+      expect(ids(detector, { x: 200, y: 10 })).not.toContain(SIDEBAR_PIN_TAB_DROP_ID);
+      expect(ids(detector, { x: 50, y: 60 })).not.toContain(SIDEBAR_PIN_TAB_DROP_ID);
+    });
+
+    it("is not selected when the drop would do nothing", () => {
+      const detector = createSidebarCollisionDetection((id) => id !== SIDEBAR_PIN_TAB_DROP_ID, {
+        pinTabId: SIDEBAR_PIN_TAB_DROP_ID,
+      });
+      expect(ids(detector, { x: 50, y: 10 })).not.toContain(SIDEBAR_PIN_TAB_DROP_ID);
+    });
+  });
 
   it.each([
     [false, sidebarMarkerId("settled-header")],
@@ -296,34 +337,26 @@ describe("sidebar drag projection", () => {
     thread("s1", "settled"),
   ];
 
-  it("opens a full row for a pin dropped on a collapsible Pinned header", () => {
+  it("reorders the Pinned tab's rows, which have no header or Active section", () => {
+    const items = [thread("p1", "pinned"), thread("p2", "pinned"), divider];
+    const result = preview({ items, settledOrder: [], settledExpanded: false }, "p1", "p2");
+    // p2 moves up a card and its gap; p1 stays where the pointer holds it.
+    expect(result.get("p2")).toEqual({ ...stationary, y: -83 });
+    expect(result.get("p1")).toEqual(stationary);
+  });
+
+  it("reorders the Threads tab's rows without any pinned markers", () => {
     const items = [
-      pinnedHeader,
-      thread("p", "pinned"),
-      divider,
+      marker("active-placeholder"),
       thread("a1", "active"),
+      thread("a2", "active"),
       settledHeader,
-      thread("s", "settled"),
+      marker("settled-placeholder"),
     ];
-    const strategy = (pinnedShelf: boolean) =>
-      createSidebarSortingStrategy({
-        items,
-        settledOrder: [],
-        settledExpanded: true,
-        pinnedShelf,
-      });
-    const args = layout(items, "a1", sidebarMarkerId("pinned-header"));
-    // The collapsible header has a row's height; the drag label has none.
-    const shift = 32;
-    const rects = args.rects.map((rect, index) =>
-      index === 0
-        ? { ...rect, height: shift, bottom: rect.top + shift }
-        : { ...rect, top: rect.top + shift, bottom: rect.bottom + shift },
-    );
-    const at = (pinnedShelf: boolean) => strategy(pinnedShelf)({ ...args, rects, index: 1 });
-    // The pinned row slides down by one card plus the gap under the header, not by the label.
-    expect(at(true)).toEqual({ ...stationary, y: 83 });
-    expect(at(false)).not.toEqual({ ...stationary, y: 83 });
+    const result = preview({ items, settledOrder: [], settledExpanded: false }, "a1", "a2");
+    // A card and its gap, plus the gap the empty placeholder slot above the rows keeps.
+    expect(result.get("a2")).toEqual({ ...stationary, y: -84 });
+    expect(result.get("a1")).toEqual(stationary);
   });
 
   it("keeps the pinned header above the gap when a lower pin moves to the top", () => {

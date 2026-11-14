@@ -174,6 +174,28 @@ export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
 
 export type SidebarSection = "pinned" | "active" | "working" | "snoozed" | "settled";
 
+/** The Pinned and Threads tabs split the thread list; each tab lists only its own threads. */
+export type SidebarPinTab = "pinned" | "threads";
+
+/** What the list shows: one tab of the strip, or the plain list while nothing is pinned. */
+export type SidebarPinView = "plain" | SidebarPinTab;
+
+export function resolveSidebarPinView(stored: SidebarPinTab, pinnedCount: number): SidebarPinView {
+  // The strip needs a pin to switch to; a remembered Pinned tab waits until one returns.
+  return pinnedCount === 0 ? "plain" : stored;
+}
+
+/** The tab that lists a thread in `section`, or undefined for a thread the list does not have. */
+export function sidebarPinTabForSection(
+  section: SidebarSection | undefined,
+): SidebarPinTab | undefined {
+  if (section === undefined) return undefined;
+  return section === "pinned" ? "pinned" : "threads";
+}
+
+/** The Pinned tab is a drop target outside the sortable list. */
+export const SIDEBAR_PIN_TAB_DROP_ID = "sidebar-pin-tab";
+
 export function resolveSidebarThreadSection(input: {
   readonly snoozed: boolean;
   readonly settled: boolean;
@@ -231,8 +253,15 @@ export function sidebarListItemId(item: SidebarListItem): string {
   return item.kind === "thread" ? item.key : sidebarMarkerId(item.marker);
 }
 
+// A list without the divider has no Pinned section: the Threads tab holds no pinned rows.
+function startingSection(items: readonly SidebarListItem[]): SidebarSection {
+  return items.some((item) => item.kind === "marker" && item.marker === "pinned-divider")
+    ? "pinned"
+    : "active";
+}
+
 function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number): SidebarSection {
-  let section: SidebarSection = "pinned";
+  let section = startingSection(items);
   for (let i = 0; i < index && i < items.length; i += 1) {
     const item = items[i]!;
     if (item.kind !== "marker") continue;
@@ -256,15 +285,19 @@ export function resolveSidebarDropTarget(
   overId: string,
 ): SidebarDropTarget | null {
   const activeIndex = items.findIndex((item) => sidebarListItemId(item) === activeKey);
+  if (activeIndex === -1 || items[activeIndex]?.kind !== "thread") return null;
+  // The tab lists no rows to drop between; the plan pins to the top of every pin.
+  if (overId === SIDEBAR_PIN_TAB_DROP_ID)
+    return { section: "pinned", pinnedOrder: [], activeOrder: [] };
   const overIndex = items.findIndex((item) => sidebarListItemId(item) === overId);
-  if (activeIndex === -1 || overIndex === -1 || items[activeIndex]?.kind !== "thread") return null;
+  if (overIndex === -1) return null;
   const moved = items.filter((_, index) => index !== activeIndex);
   moved.splice(overIndex, 0, items[activeIndex]!);
   const section = sectionAtSidebarSlot(moved, overIndex);
   if (section === "working" || section === "snoozed") return null;
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
-  let currentSection: SidebarSection = "pinned";
+  let currentSection = startingSection(moved);
   for (const item of moved) {
     if (item.kind === "marker") {
       if (item.marker === "pinned-divider") currentSection = "active";
@@ -381,10 +414,15 @@ export function planSidebarThreadDrop(input: {
   readonly activeReorderableKeys?: ReadonlySet<string>;
   readonly activeTimeOrdered?: boolean;
   /**
-   * The Pinned shelf lists no rows to drop between, so a drop into it goes to its top and the
-   * order comes from every pinned thread rather than the rows on screen.
+   * The Threads tab lists no pinned rows to drop between, so a drop on the Pinned tab goes to
+   * the top of the pins and the order comes from every pinned thread rather than the rows on screen.
    */
-  readonly pinnedCollapsed?: boolean;
+  readonly pinnedRowsHidden?: boolean;
+  /**
+   * The Pinned tab lists only pins and shows no Active label, so a drop past the last pin must
+   * not unpin the thread through a slot the user cannot see.
+   */
+  readonly pinnedRowsOnly?: boolean;
 }): SidebarThreadDropPlan {
   const {
     activeKey,
@@ -400,6 +438,7 @@ export function planSidebarThreadDrop(input: {
     activeReorderableKeys,
   } = input;
   if (activeSection === "working") return { kind: "none" };
+  if (input.pinnedRowsOnly && target.section !== "pinned") return { kind: "none" };
   if (input.supportsSettlement === false && (target.section === "settled" || activeSettled)) {
     return { kind: "none" };
   }
@@ -474,7 +513,7 @@ export function planSidebarThreadDrop(input: {
     case "settled":
       return activeSection === "settled" ? { kind: "none" } : { kind: "settle" };
     case "pinned": {
-      const order = input.pinnedCollapsed
+      const order = input.pinnedRowsHidden
         ? activeSection === "pinned"
           ? pinnedOrder
           : [activeKey, ...pinnedOrder.filter((key) => key !== activeKey)]
